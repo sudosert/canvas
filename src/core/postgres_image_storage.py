@@ -134,13 +134,14 @@ class PostgresImageStorage:
             lo_oid = self.conn.lo_create(0)
             lo = self.conn.lo_open(lo_oid, mode=psycopg2.extensions.LO_WRITE)
             
-            # Write data in chunks to handle large files
-            chunk_size = 1024 * 1024  # 1MB chunks
-            for i in range(0, len(image_data), chunk_size):
-                chunk = image_data[i:i + chunk_size]
-                lo.write(chunk)
-            
-            lo.close()
+            try:
+                # Write data in chunks to handle large files
+                chunk_size = 1024 * 1024  # 1MB chunks
+                for i in range(0, len(image_data), chunk_size):
+                    chunk = image_data[i:i + chunk_size]
+                    lo.write(chunk)
+            finally:
+                lo.close()
             
             # Insert metadata
             with self.conn.cursor() as cur:
@@ -227,16 +228,17 @@ class PostgresImageStorage:
                 lo_oid = row[0]
                 lo = self.conn.lo_open(lo_oid, mode=psycopg2.extensions.LO_READ)
                 
-                # Read in chunks
-                chunks = []
-                while True:
-                    chunk = lo.read(1024 * 1024)  # 1MB chunks
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                
-                lo.close()
-                return b''.join(chunks)
+                try:
+                    # Read in chunks
+                    chunks = []
+                    while True:
+                        chunk = lo.read(1024 * 1024)  # 1MB chunks
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                    return b''.join(chunks)
+                finally:
+                    lo.close()
                 
         except Exception as e:
             print(f"[ERROR] Failed to read image: {e}")

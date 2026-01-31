@@ -148,7 +148,7 @@ def main():
     # Open folder if specified
     if args.folder:
         if os.path.isdir(args.folder):
-            window._load_folder(args.folder)
+            window.load_folder(args.folder)
         else:
             QMessageBox.warning(
                 window,

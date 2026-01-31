@@ -218,6 +218,34 @@ class ImageStorage:
         cursor = self.conn.cursor()
         cursor.execute('SELECT * FROM stored_images ORDER BY stored_at DESC')
         return [self._row_to_metadata(row) for row in cursor.fetchall()]
+
+    def get_image_details(self, original_path: str) -> Optional[Dict[str, Any]]:
+        """
+        Get additional details for a stored image.
+
+        Args:
+            original_path: Original file path of the image
+
+        Returns:
+            Dictionary with stored_at, original_deleted, file_size or None if not found
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                'SELECT stored_at, original_deleted, file_size FROM stored_images WHERE original_path = ?',
+                (original_path,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'stored_at': row['stored_at'],
+                    'original_deleted': row['original_deleted'],
+                    'file_size': row['file_size']
+                }
+            return None
+        except Exception as e:
+            print(f"[ERROR] Failed to get image details: {e}")
+            return None
     
     def delete_image(self, original_path: str, delete_data: bool = True) -> bool:
         """

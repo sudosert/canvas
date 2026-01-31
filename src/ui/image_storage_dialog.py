@@ -208,25 +208,20 @@ class ImageStorageDialog(QDialog):
     def _refresh_image_list(self):
         """Refresh the list of stored images."""
         self.images_table.setRowCount(0)
-        
+
         metadata_list = self.storage.get_all_metadata()
-        
+
         for metadata in metadata_list:
             row = self.images_table.rowCount()
             self.images_table.insertRow(row)
-            
-            # Get additional info from storage
-            cursor = self.storage.conn.cursor()
-            cursor.execute('''
-                SELECT stored_at, original_deleted, file_size 
-                FROM stored_images WHERE original_path = ?
-            ''', (metadata.file_path,))
-            db_row = cursor.fetchone()
-            
+
+            # Get additional info from storage using the public API
+            details = self.storage.get_image_details(metadata.file_path)
+
             self.images_table.setItem(row, 0, QTableWidgetItem(metadata.file_name))
             self.images_table.setItem(row, 1, QTableWidgetItem(metadata.dimensions))
-            
-            size_mb = (db_row['file_size'] if db_row else 0) / (1024 * 1024)
+
+            size_mb = (details['file_size'] if details else 0) / (1024 * 1024)
             self.images_table.setItem(row, 2, QTableWidgetItem(f"{size_mb:.2f} MB"))
             
             stored_at = db_row['stored_at'] if db_row else "Unknown"

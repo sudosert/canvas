@@ -269,8 +269,12 @@ class MainWindow(QMainWindow):
         if folder:
             self._load_folder(folder)
     
+    def load_folder(self, folder: str):
+        """Load images from a folder (public API)."""
+        self._load_folder(folder)
+
     def _load_folder(self, folder: str):
-        """Load images from a folder."""
+        """Load images from a folder (internal implementation)."""
         print(f"[DEBUG] Starting to load folder: {folder}")
         self.current_folder = folder
         self.settings.setValue("last_folder", folder)
@@ -318,37 +322,39 @@ class MainWindow(QMainWindow):
         
         try:
             images = None
-            
+            loaded_from_cache = False
+
             # Try to load from cache if enabled
             if self.use_metadata_cache:
                 print("[DEBUG] Attempting to load from metadata cache...")
                 cached_images = self.metadata_cache.load_cache(folder)
                 if cached_images is not None:
                     images = cached_images
+                    loaded_from_cache = True
                     print(f"[DEBUG] Loaded {len(images)} images from cache")
                     progress.setValue(count)  # Complete progress
-            
+
             # If not cached, scan the directory
             if images is None:
                 print("[DEBUG] Starting scan...")
                 images = scanner.scan_directory(folder)
                 print(f"[DEBUG] Scan complete, got {len(images)} images")
-                
+
                 # Save to cache if enabled
                 if self.use_metadata_cache and not progress.wasCanceled():
                     print("[DEBUG] Saving to metadata cache...")
                     self.metadata_cache.save_cache(folder, images)
-            
+
             if not progress.wasCanceled():
                 print("[DEBUG] Adding images to index...")
                 added_count = self.image_index.add_images(images)
                 print(f"[DEBUG] Added {added_count} images to index")
-                
+
                 print("[DEBUG] Applying filters...")
                 # Apply filters and update UI
                 self._apply_filters()
-                
-                cache_status = " (cached)" if self.use_metadata_cache else ""
+
+                cache_status = " (cached)" if loaded_from_cache else ""
                 self.status_bar.showMessage(
                     f"Loaded {len(images)} images{cache_status} from {folder}",
                     5000

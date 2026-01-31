@@ -315,12 +315,6 @@ class PaginatedThumbnailGrid(QWidget):
         for thumb in self.thumbnails:
             thumb.selected = (thumb.file_path == file_path)
     
-    def resizeEvent(self, event):
-        """Handle resize to adjust grid columns."""
-        super().resizeEvent(event)
-        # Only reload if columns would change significantly
-        # This prevents constant reloading while resizing
-    
     def clear(self):
         """Clear all images."""
         self._clear_grid()
