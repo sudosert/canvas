@@ -45,6 +45,5 @@ settings.ini
 .requirements_installed
 
 # Personal
-plans/
-notes/
-docs/
+# Note: These folders are excluded from git tracking but remain visible in the workspace
+# for local documentation and planning purposes.
