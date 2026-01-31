@@ -6,7 +6,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QFileDialog, QMessageBox, QProgressDialog,
-    QMenuBar, QMenu, QToolBar, QStatusBar, QLabel
+    QMenuBar, QMenu, QToolBar, QStatusBar, QLabel, QProgressBar, QTabWidget
 )
 from PyQt6.QtCore import Qt, QSettings, QTimer
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
@@ -14,6 +14,7 @@ from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from ..core.image_scanner import ImageScanner
 from ..core.image_index import ImageIndex
 from ..core.metadata_cache import MetadataCache
+from ..core.metadata_parser import MetadataParser
 from ..models.image_data import ImageMetadata
 from .paginated_thumbnail_grid import PaginatedThumbnailGrid
 from .image_viewer import ImageViewer
@@ -21,15 +22,22 @@ from .metadata_panel import MetadataPanel
 from .filter_bar import FilterBar
 from .slideshow_dialog import SlideshowDialog
 from .image_storage_dialog import ImageStorageDialog
+from .folder_loader import FolderLoaderThread
+from .filesystem_browser import FilesystemBrowser
+from .settings_dialog import SettingsDialog
 
 
 class MainWindow(QMainWindow):
     """Main application window."""
     
-    def __init__(self):
+    def __init__(self, skip_db_update: bool = False):
         super().__init__()
         self.setWindowTitle("SD Image Viewer")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1750, 1125)  # 25% larger than 1400x900
+        self.resize(2000, 1250)  # 25% larger than 1600x1000
+        
+        # Store configuration
+        self.skip_db_update = skip_db_update
         
         # Initialize data
         self.image_index = ImageIndex()
@@ -42,6 +50,8 @@ class MainWindow(QMainWindow):
         self.slideshow_random = False
         self.slideshow_order: List[int] = []
         self.slideshow_position = 0
+        self.loader_thread: Optional[FolderLoaderThread] = None
+        self.loading_progress_bar: Optional[QProgressBar] = None
         
         # Load settings
         self.settings = QSettings("SDImageViewer", "Settings")
@@ -51,7 +61,8 @@ class MainWindow(QMainWindow):
         self._setup_menu()
         self._setup_toolbar()
         self._setup_shortcuts()
-        self._load_last_folder()
+        # Don't load last folder automatically - let main.py handle it after UI is shown
+        # self._load_last_folder()
     
     def _setup_ui(self):
         """Set up the main UI."""
@@ -66,43 +77,70 @@ class MainWindow(QMainWindow):
         # Filter bar
         self.filter_bar = FilterBar()
         self.filter_bar.filter_changed.connect(self._apply_filters)
+        self.filter_bar.sort_changed.connect(self._apply_filters)
         layout.addWidget(self.filter_bar)
         
         # Main splitter
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)  # Prevent panels from being collapsed
+        splitter.setChildrenCollapsible(True)  # Allow panels to be collapsed by user
         
-        # Left: Thumbnail grid (paginated)
+        # Left: Tab widget with thumbnails and filesystem browser
+        self.left_tabs = QTabWidget()
+        self.left_tabs.setMinimumWidth(300)
+        
+        # Gallery tab (formerly Thumbnails)
         self.thumbnail_grid = PaginatedThumbnailGrid()
         self.thumbnail_grid.image_selected.connect(self._on_thumbnail_selected)
-        self.thumbnail_grid.setMinimumWidth(250)
-        self.thumbnail_grid.setMaximumWidth(600)
-        splitter.addWidget(self.thumbnail_grid)
+        
+        # Add sort controls above the gallery
+        sort_controls = self.filter_bar.create_sort_controls()
+        self.thumbnail_grid.set_sort_controls(sort_controls)
+        
+        self.left_tabs.addTab(self.thumbnail_grid, "🖼️ Gallery")
+        
+        # Filesystem browser tab
+        self.filesystem_browser = FilesystemBrowser()
+        self.filesystem_browser.folder_selected.connect(self._on_filesystem_folder_selected)
+        self.filesystem_browser.file_selected.connect(self._on_filesystem_file_selected)
+        self.filesystem_browser.file_selected.connect(self._on_filesystem_file_selected)
+        self.left_tabs.addTab(self.filesystem_browser, "📁 Browse")
+        
+        splitter.addWidget(self.left_tabs)
         
         # Middle: Image viewer
         self.image_viewer = ImageViewer()
-        self.image_viewer.setMinimumWidth(400)
+        self.image_viewer.setMinimumWidth(300)
         splitter.addWidget(self.image_viewer)
         
         # Right: Metadata panel
         self.metadata_panel = MetadataPanel()
-        self.metadata_panel.setMinimumWidth(250)
-        self.metadata_panel.setMaximumWidth(500)
+        self.metadata_panel.setMinimumWidth(300)
         splitter.addWidget(self.metadata_panel)
         
-        # Set stretch factors for proportional resizing
-        splitter.setStretchFactor(0, 0)  # Thumbnail grid - fixed preferrence
-        splitter.setStretchFactor(1, 1)  # Image viewer - takes extra space
-        splitter.setStretchFactor(2, 0)  # Metadata panel - fixed preferrence
+        # Set stretch factors for equal resizing
+        splitter.setStretchFactor(0, 1)  # Thumbnail grid - equal
+        splitter.setStretchFactor(1, 1)  # Image viewer - equal
+        splitter.setStretchFactor(2, 1)  # Metadata panel - equal
         
-        # Set initial splitter proportions
-        splitter.setSizes([300, 700, 300])
+        # Set initial splitter proportions (equal thirds)
+        total_width = 2000  # Default window width
+        equal_size = total_width // 3
+        splitter.setSizes([equal_size, equal_size, equal_size])
         
         layout.addWidget(splitter, 1)  # Add stretch factor to take all available space
         
-        # Status bar
+        # Status bar with progress indicator
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        
+        # Add progress bar to status bar (hidden by default)
+        self.loading_progress_bar = QProgressBar()
+        self.loading_progress_bar.setMaximumWidth(200)
+        self.loading_progress_bar.setMaximumHeight(16)
+        self.loading_progress_bar.setTextVisible(True)
+        self.loading_progress_bar.setVisible(False)
+        self.status_bar.addPermanentWidget(self.loading_progress_bar)
+        
         self.status_bar.showMessage("Ready")
         
         # Set dark theme
@@ -199,6 +237,27 @@ class MainWindow(QMainWindow):
         storage_action.triggered.connect(self._show_storage_manager)
         view_menu.addAction(storage_action)
         
+        # Tools menu
+        tools_menu = menubar.addMenu("&Tools")
+        
+        # Refresh metadata actions
+        refresh_current_action = QAction("Refresh Current Images Metadata", self)
+        refresh_current_action.setShortcut(QKeySequence("Ctrl+R"))
+        refresh_current_action.triggered.connect(self._refresh_current_metadata)
+        tools_menu.addAction(refresh_current_action)
+        
+        refresh_all_action = QAction("Refresh All Database Metadata", self)
+        refresh_all_action.triggered.connect(self._refresh_all_metadata)
+        tools_menu.addAction(refresh_all_action)
+        
+        tools_menu.addSeparator()
+        
+        # Settings
+        settings_action = QAction("Settings...", self)
+        settings_action.setShortcut(QKeySequence.StandardKey.Preferences)
+        settings_action.triggered.connect(self._show_settings)
+        tools_menu.addAction(settings_action)
+        
         # Help menu
         help_menu = menubar.addMenu("&Help")
         
@@ -256,7 +315,7 @@ class MainWindow(QMainWindow):
         """Load the last opened folder from settings."""
         last_folder = self.settings.value("last_folder", "")
         if last_folder and os.path.exists(last_folder):
-            self._load_folder(last_folder)
+            self._load_folder(last_folder, recursive=True)
     
     def _open_folder(self):
         """Open a folder dialog and load images."""
@@ -269,102 +328,97 @@ class MainWindow(QMainWindow):
         if folder:
             self._load_folder(folder)
     
-    def _load_folder(self, folder: str):
-        """Load images from a folder."""
-        print(f"[DEBUG] Starting to load folder: {folder}")
+    def _load_folder(self, folder: str, recursive: bool = True):
+        """Load images from a folder asynchronously."""
+        print(f"[DEBUG] Starting to load folder: {folder} (recursive={recursive})")
         self.current_folder = folder
         self.settings.setValue("last_folder", folder)
-        
-        # Count images first
-        print("[DEBUG] Counting images...")
-        scanner = ImageScanner()
-        count = scanner.count_images(folder)
-        print(f"[DEBUG] Found {count} images")
-        
-        if count == 0:
-            QMessageBox.information(
-                self,
-                "No Images",
-                f"No PNG or JPEG images found in:\n{folder}"
-            )
-            return
-        
-        # Show progress dialog
-        progress = QProgressDialog(
-            f"Loading {count} images...",
-            "Cancel",
-            0,
-            count,
-            self
-        )
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(500)
         
         # Clear existing index
         print("[DEBUG] Clearing existing index...")
         self.image_index.clear()
         self.filtered_images = []
         self.current_image_index = -1
+        self.thumbnail_grid.set_images([])  # Clear thumbnails
         
-        # Scan with progress updates
-        def progress_callback(current, total):
-            progress.setValue(current)
-            if progress.wasCanceled():
-                print(f"[DEBUG] Loading cancelled at {current}/{total}")
-                return False
-            return True
+        # Show loading indicator
+        self.loading_progress_bar.setVisible(True)
+        self.loading_progress_bar.setRange(0, 0)  # Indeterminate
+        self.status_bar.showMessage("Loading images...")
         
-        scanner = ImageScanner(progress_callback=progress_callback)
+        # Cancel any existing loader
+        if self.loader_thread and self.loader_thread.isRunning():
+            self.loader_thread.cancel()
+            self.loader_thread.wait()
         
-        try:
-            images = None
-            
-            # Try to load from cache if enabled
-            if self.use_metadata_cache:
-                print("[DEBUG] Attempting to load from metadata cache...")
-                cached_images = self.metadata_cache.load_cache(folder)
-                if cached_images is not None:
-                    images = cached_images
-                    print(f"[DEBUG] Loaded {len(images)} images from cache")
-                    progress.setValue(count)  # Complete progress
-            
-            # If not cached, scan the directory
-            if images is None:
-                print("[DEBUG] Starting scan...")
-                images = scanner.scan_directory(folder)
-                print(f"[DEBUG] Scan complete, got {len(images)} images")
-                
-                # Save to cache if enabled
-                if self.use_metadata_cache and not progress.wasCanceled():
-                    print("[DEBUG] Saving to metadata cache...")
-                    self.metadata_cache.save_cache(folder, images)
-            
-            if not progress.wasCanceled():
-                print("[DEBUG] Adding images to index...")
-                added_count = self.image_index.add_images(images)
-                print(f"[DEBUG] Added {added_count} images to index")
-                
-                print("[DEBUG] Applying filters...")
-                # Apply filters and update UI
-                self._apply_filters()
-                
-                cache_status = " (cached)" if self.use_metadata_cache else ""
-                self.status_bar.showMessage(
-                    f"Loaded {len(images)} images{cache_status} from {folder}",
-                    5000
-                )
-                print("[DEBUG] Load complete")
-        except Exception as e:
-            import traceback
-            error_msg = f"{str(e)}\n\n{traceback.format_exc()}"
-            print(f"[ERROR] Failed to load images: {error_msg}")
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to load images:\n{str(e)}"
-            )
+        # Create and start loader thread
+        self.loader_thread = FolderLoaderThread(
+            folder,
+            use_cache=self.use_metadata_cache,
+            skip_validation=self.skip_db_update,
+            recursive=recursive
+        )
         
-        progress.close() 
+        # Connect signals
+        self.loader_thread.progress_update.connect(self._on_loading_progress)
+        self.loader_thread.loading_complete.connect(self._on_loading_complete)
+        self.loader_thread.loading_failed.connect(self._on_loading_failed)
+        
+        # Start loading
+        self.loader_thread.start()
+    
+    def _on_loading_progress(self, current: int, total: int, message: str):
+        """Handle loading progress updates."""
+        self.status_bar.showMessage(message)
+        if total > 0:
+            self.loading_progress_bar.setRange(0, total)
+            self.loading_progress_bar.setValue(current)
+        else:
+            self.loading_progress_bar.setRange(0, 0)  # Indeterminate
+    
+    def _on_loading_complete(self, images: List[ImageMetadata]):
+        """Handle successful loading completion."""
+        print(f"[DEBUG] Loading complete, got {len(images)} images")
+        
+        # Hide loading indicator
+        self.loading_progress_bar.setVisible(False)
+        
+        # Add images to index
+        print("[DEBUG] Adding images to index...")
+        added_count = self.image_index.add_images(images)
+        print(f"[DEBUG] Added {added_count} images to index")
+        
+        # Apply filters and update UI
+        print("[DEBUG] Applying filters...")
+        self._apply_filters()
+        
+        # Update filesystem browser to show current folder
+        if self.current_folder:
+            self.filesystem_browser.set_root_path(self.current_folder)
+        
+        # Update status
+        cache_status = " (cached)" if self.use_metadata_cache else ""
+        skip_status = " [read-only]" if self.skip_db_update else ""
+        self.status_bar.showMessage(
+            f"Loaded {len(images)} images{cache_status}{skip_status} from {self.current_folder}",
+            5000
+        )
+        print("[DEBUG] Load complete")
+    
+    def _on_loading_failed(self, error_msg: str):
+        """Handle loading failure."""
+        print(f"[ERROR] Loading failed: {error_msg}")
+        
+        # Hide loading indicator
+        self.loading_progress_bar.setVisible(False)
+        self.status_bar.showMessage("Loading failed", 5000)
+        
+        # Show error dialog
+        QMessageBox.critical(
+            self,
+            "Error",
+            f"Failed to load images:\n{error_msg}"
+        )
     
     def _toggle_metadata_cache(self, enabled: bool):
         """Toggle metadata caching on/off."""
@@ -394,22 +448,153 @@ class MainWindow(QMainWindow):
     
     def _show_storage_manager(self):
         """Show the image storage manager dialog."""
-        dialog = ImageStorageDialog(self)
+        dialog = ImageStorageDialog(self, skip_update=self.skip_db_update)
         dialog.exec()
     
+    def _show_settings(self):
+        """Show the settings dialog."""
+        dialog = SettingsDialog(self)
+        if dialog.exec():
+            # Settings were saved, show confirmation
+            self.status_bar.showMessage("Settings saved", 3000)
+    
+    def _refresh_current_metadata(self):
+        """Refresh metadata for currently loaded images."""
+        if not self.current_folder or not self.filtered_images:
+            QMessageBox.information(
+                self,
+                "No Images",
+                "No images are currently loaded."
+            )
+            return
+        
+        reply = QMessageBox.question(
+            self,
+            "Refresh Metadata",
+            f"Re-parse metadata for {len(self.filtered_images)} currently loaded images?\n\n"
+            "This will re-read the image files and update the metadata cache.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Show progress
+            progress = QProgressDialog(
+                "Refreshing metadata...",
+                "Cancel",
+                0,
+                len(self.filtered_images),
+                self
+            )
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            
+            refreshed = 0
+            for i, img_metadata in enumerate(self.filtered_images):
+                if progress.wasCanceled():
+                    break
+                
+                progress.setValue(i)
+                progress.setLabelText(f"Refreshing {img_metadata.file_name}...")
+                
+                # Re-parse the image
+                new_metadata = MetadataParser.parse_image(img_metadata.file_path)
+                
+                # Update in index
+                self.image_index.add_image(new_metadata)
+                refreshed += 1
+            
+            progress.close()
+            
+            # Save to cache
+            if self.use_metadata_cache:
+                all_images = self.image_index.get_all_images()
+                self.metadata_cache.save_cache(self.current_folder, all_images)
+            
+            # Reload display
+            self._apply_filters()
+            
+            QMessageBox.information(
+                self,
+                "Refresh Complete",
+                f"Refreshed metadata for {refreshed} images."
+            )
+    
+    def _refresh_all_metadata(self):
+        """Refresh metadata for all images in the database."""
+        reply = QMessageBox.question(
+            self,
+            "Refresh All Metadata",
+            "Re-parse metadata for ALL images in the current folder?\n\n"
+            "This may take a while for large collections.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Get all images from index
+            all_images = self.image_index.get_all_images()
+            
+            if not all_images:
+                QMessageBox.information(self, "No Images", "No images in database.")
+                return
+            
+            # Show progress
+            progress = QProgressDialog(
+                "Refreshing all metadata...",
+                "Cancel",
+                0,
+                len(all_images),
+                self
+            )
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            
+            refreshed = 0
+            for i, img_metadata in enumerate(all_images):
+                if progress.wasCanceled():
+                    break
+                
+                progress.setValue(i)
+                progress.setLabelText(f"Refreshing {img_metadata.file_name}...")
+                
+                # Re-parse the image
+                new_metadata = MetadataParser.parse_image(img_metadata.file_path)
+                
+                # Update in index
+                self.image_index.add_image(new_metadata)
+                refreshed += 1
+            
+            progress.close()
+            
+            # Save to cache
+            if self.use_metadata_cache and self.current_folder:
+                all_images = self.image_index.get_all_images()
+                self.metadata_cache.save_cache(self.current_folder, all_images)
+            
+            # Reload display
+            self._apply_filters()
+            
+            QMessageBox.information(
+                self,
+                "Refresh Complete",
+                f"Refreshed metadata for {refreshed} images."
+            )
+    
     def _apply_filters(self):
-        """Apply current filter settings."""
+        """Apply current filter and sort settings."""
         print("[DEBUG] Applying filters...")
         include_terms = self.filter_bar.get_include_terms()
         exclude_terms = self.filter_bar.get_exclude_terms()
+        sort_by = self.filter_bar.get_sort_by()
+        reverse = self.filter_bar.get_reverse_sort()
         print(f"[DEBUG] Include terms: {include_terms}")
         print(f"[DEBUG] Exclude terms: {exclude_terms}")
+        print(f"[DEBUG] Sort by: {sort_by}, Reverse: {reverse}")
         
-        # Get filtered images from index
+        # Get filtered and sorted images from index
         print("[DEBUG] Querying image index...")
         self.filtered_images = self.image_index.filter_images(
             include_terms=include_terms,
-            exclude_terms=exclude_terms
+            exclude_terms=exclude_terms,
+            sort_by=sort_by,
+            reverse=reverse
         )
         print(f"[DEBUG] Got {len(self.filtered_images)} filtered images")
         
@@ -437,6 +622,33 @@ class MainWindow(QMainWindow):
             if img.file_path == file_path:
                 self._show_image_at_index(i)
                 break
+    
+    def _on_filesystem_folder_selected(self, folder_path: str, include_subfolders: bool = True):
+        """Handle folder selection from filesystem browser."""
+        print(f"[DEBUG] Filesystem folder selected: {folder_path} (include_subfolders={include_subfolders})")
+        # Load the selected folder
+        self._load_folder(folder_path, recursive=include_subfolders)
+        # Switch to gallery tab to show results
+        self.left_tabs.setCurrentIndex(0)
+    
+    def _on_filesystem_file_selected(self, file_path: str):
+        """Handle file selection from filesystem browser."""
+        print(f"[DEBUG] Filesystem file selected: {file_path}")
+        # If it's an image file, try to show it
+        if file_path.lower().endswith(('.png', '.jpg', '.jpeg')):
+            # Check if it's in the current filtered images
+            for i, img in enumerate(self.filtered_images):
+                if img.file_path == file_path:
+                    self._show_image_at_index(i)
+                    # Switch to gallery tab
+                    self.left_tabs.setCurrentIndex(0)
+                    return
+            
+            # If not in filtered images, load its parent folder
+            parent_folder = os.path.dirname(file_path)
+            self._load_folder(parent_folder)
+            # Switch to gallery tab
+            self.left_tabs.setCurrentIndex(0)
     
     def _populate_thumbnail_grid(self):
         """Populate thumbnail grid with current filtered images."""

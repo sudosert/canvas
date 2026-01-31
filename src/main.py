@@ -7,9 +7,10 @@ import argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 
 from src.ui.main_window import MainWindow
+from src.ui.splash_screen import SplashScreen
 from src.core.metadata_cache import MetadataCache
 from src.core.thumbnail_persistence import ThumbnailPersistence
 
@@ -25,6 +26,7 @@ Examples:
   python -m src.main --reset            Clear all caches and start fresh
   python -m src.main --reset --no-confirm  Clear caches without confirmation
   python -m src.main --folder /path/to/images  Open a specific folder on startup
+  python -m src.main --skip-db-update   Skip database update, use existing data
         """
     )
     
@@ -47,6 +49,13 @@ Examples:
         type=str,
         dest='folder',
         help='Open a specific folder on startup'
+    )
+    
+    parser.add_argument(
+        '--skip-db-update',
+        action='store_true',
+        dest='skip_db_update',
+        help='Skip database update/refresh, use existing data only'
     )
     
     parser.add_argument(
@@ -141,20 +150,44 @@ def main():
     font.setPointSize(10)
     app.setFont(font)
     
-    # Create and show main window
-    window = MainWindow()
-    window.show()
+    # Show splash screen
+    splash = SplashScreen()
+    splash.show()
+    app.processEvents()
     
-    # Open folder if specified
-    if args.folder:
-        if os.path.isdir(args.folder):
-            window._load_folder(args.folder)
+    # Initialize components
+    splash.update_status("Initializing application...")
+    app.processEvents()
+    
+    # Create main window (but don't show yet)
+    splash.update_status("Loading user interface...")
+    app.processEvents()
+    window = MainWindow(skip_db_update=args.skip_db_update)
+    
+    # Close splash and show main window
+    def show_main_window():
+        splash.finish(window)
+        window.show()
+        
+        # Load folder after UI is shown
+        if args.folder:
+            if os.path.isdir(args.folder):
+                # Use QTimer to load folder after event loop starts
+                QTimer.singleShot(100, lambda: window._load_folder(args.folder))
+            else:
+                QMessageBox.warning(
+                    window,
+                    "Invalid Folder",
+                    f"The specified folder does not exist:\n{args.folder}"
+                )
         else:
-            QMessageBox.warning(
-                window,
-                "Invalid Folder",
-                f"The specified folder does not exist:\n{args.folder}"
-            )
+            # Load last folder if no folder specified
+            last_folder = window.settings.value("last_folder", "")
+            if last_folder and os.path.isdir(last_folder):
+                QTimer.singleShot(100, lambda: window._load_folder(last_folder))
+    
+    # Show main window after a short delay
+    QTimer.singleShot(500, show_main_window)
     
     # Run application
     sys.exit(app.exec())

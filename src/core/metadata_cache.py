@@ -53,12 +53,13 @@ class MetadataCache:
         except:
             return ""
     
-    def load_cache(self, folder_path: str) -> Optional[List[ImageMetadata]]:
+    def load_cache(self, folder_path: str, skip_validation: bool = False) -> Optional[List[ImageMetadata]]:
         """
         Load cached metadata for a folder if available and valid.
         
         Args:
             folder_path: Path to the image folder
+            skip_validation: If True, skip file change detection and use cache as-is
             
         Returns:
             List of ImageMetadata if cache is valid, None otherwise
@@ -83,26 +84,28 @@ class MetadataCache:
                 print(f"[DEBUG] Cache folder path mismatch, rebuilding")
                 return None
             
-            # Verify all files are still valid
+            # Verify all files are still valid (unless skipped)
             cached_files = cache_data.get('files', {})
-            current_files = self._scan_folder_files(folder_path)
             
-            # Check for new, modified, or deleted files
-            if set(cached_files.keys()) != set(current_files.keys()):
-                print(f"[DEBUG] File list changed, cache invalid")
-                return None
-            
-            # Check each file's hash
-            for file_path, current_hash in current_files.items():
-                cached_entry = cached_files.get(file_path)
-                if not cached_entry:
-                    print(f"[DEBUG] Missing cache entry for {file_path}")
+            if not skip_validation:
+                current_files = self._scan_folder_files(folder_path)
+                
+                # Check for new, modified, or deleted files
+                if set(cached_files.keys()) != set(current_files.keys()):
+                    print(f"[DEBUG] File list changed, cache invalid")
                     return None
                 
-                cached_hash = cached_entry.get('file_hash', '')
-                if cached_hash != current_hash:
-                    print(f"[DEBUG] File changed: {file_path}")
-                    return None
+                # Check each file's hash
+                for file_path, current_hash in current_files.items():
+                    cached_entry = cached_files.get(file_path)
+                    if not cached_entry:
+                        print(f"[DEBUG] Missing cache entry for {file_path}")
+                        return None
+                    
+                    cached_hash = cached_entry.get('file_hash', '')
+                    if cached_hash != current_hash:
+                        print(f"[DEBUG] File changed: {file_path}")
+                        return None
             
             # Cache is valid, reconstruct metadata
             metadata_list = []

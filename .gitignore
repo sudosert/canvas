@@ -44,6 +44,8 @@ Thumbs.db
 settings.ini
 .requirements_installed
 
+
 # Personal
-# Note: These folders are excluded from git tracking but remain visible in the workspace
-# for local documentation and planning purposes.
+examples/
+scripts/
+TODO
