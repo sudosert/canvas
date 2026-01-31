@@ -187,7 +187,9 @@ class ImageIndex:
         include_terms: List[str] = None,
         exclude_terms: List[str] = None,
         model: str = None,
-        source: str = None
+        source: str = None,
+        sort_by: str = 'path',
+        reverse: bool = False
     ) -> List[ImageMetadata]:
         """
         Filter images based on criteria.
@@ -197,6 +199,8 @@ class ImageIndex:
             exclude_terms: Terms that must NOT be in prompt (case-insensitive)
             model: Filter by model name (partial match)
             source: Filter by source (a1111, comfyui, unknown)
+            sort_by: Sort field - 'path', 'date', 'dimensions', 'file_size', 'random'
+            reverse: Reverse sort order
             
         Returns:
             List of matching ImageMetadata objects
@@ -228,7 +232,24 @@ class ImageIndex:
             query += ' AND source = ?'
             params.append(source)
         
-        query += ' ORDER BY file_path'
+        # Apply sorting
+        # For date, default is newest first (DESC), reverse is oldest first (ASC)
+        # For other fields, default is ASC, reverse is DESC
+        if sort_by == 'date':
+            order_direction = 'ASC' if reverse else 'DESC'
+            query += f' ORDER BY modified_time {order_direction}'
+        elif sort_by == 'dimensions':
+            # Sort by total pixels (width * height)
+            order_direction = 'DESC' if reverse else 'ASC'
+            query += f' ORDER BY (width * height) {order_direction}'
+        elif sort_by == 'file_size':
+            order_direction = 'DESC' if reverse else 'ASC'
+            query += f' ORDER BY file_size {order_direction}'
+        elif sort_by == 'random':
+            query += ' ORDER BY RANDOM()'
+        else:  # path (default)
+            order_direction = 'DESC' if reverse else 'ASC'
+            query += f' ORDER BY file_path {order_direction}'
         
         cursor.execute(query, params)
         return [self._row_to_metadata(row) for row in cursor.fetchall()]
@@ -279,6 +300,18 @@ class ImageIndex:
     
     def _row_to_metadata(self, row: sqlite3.Row) -> ImageMetadata:
         """Convert a database row to ImageMetadata."""
+        import ast
+        
+        extra_params_raw = row['extra_params'] or '{}'
+        try:
+            extra_params = json.loads(extra_params_raw)
+        except json.JSONDecodeError:
+            # Try parsing as Python literal (handles single-quoted strings)
+            try:
+                extra_params = ast.literal_eval(extra_params_raw)
+            except (ValueError, SyntaxError):
+                extra_params = {}
+        
         return ImageMetadata(
             file_path=row['file_path'],
             file_name=row['file_name'],
@@ -296,7 +329,7 @@ class ImageIndex:
             seed=row['seed'],
             source=row['source'] or '',
             raw_metadata=row['raw_metadata'] or '',
-            extra_params=json.loads(row['extra_params'] or '{}')
+            extra_params=extra_params
         )
     
     def close(self) -> None:

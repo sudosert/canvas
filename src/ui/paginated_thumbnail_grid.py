@@ -2,7 +2,7 @@
 from typing import List, Optional, Callable
 from PyQt6.QtWidgets import (
     QWidget, QGridLayout, QScrollArea, QLabel, QVBoxLayout,
-    QSizePolicy, QFrame, QHBoxLayout, QPushButton, QSpinBox
+    QSizePolicy, QFrame, QHBoxLayout, QPushButton, QSpinBox, QComboBox
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QSize
 from PyQt6.QtGui import QPixmap, QMouseEvent, QKeyEvent, QWheelEvent
@@ -22,14 +22,23 @@ class PaginatedThumbnailGrid(QWidget):
     page_changed = pyqtSignal(int, int)  # Emits current_page, total_pages
     
     # Items per page - adjust based on typical screen size
-    DEFAULT_ITEMS_PER_PAGE = 100
+    DEFAULT_ITEMS_PER_PAGE = 25
+    
+    # Thumbnail size presets
+    THUMBNAIL_SIZES = {
+        'small': (100, 100),
+        'medium': (150, 150),
+        'large': (200, 200),
+        'filename': (0, 0)  # Special case for filename-only mode
+    }
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.thumbnails: List[ThumbnailLabel] = []
         self.current_images: List[ImageMetadata] = []
         self.selected_path: Optional[str] = None
-        self.thumbnail_cache = ThumbnailCache(thumbnail_size=(200, 200))
+        self.thumbnail_size_mode = 'medium'  # Default to medium
+        self.thumbnail_cache = ThumbnailCache(thumbnail_size=self.THUMBNAIL_SIZES['medium'])
         self.thumbnail_persistence = ThumbnailPersistence()
         
         # Pagination
@@ -43,8 +52,15 @@ class PaginatedThumbnailGrid(QWidget):
         """Set up the UI components."""
         # Main layout
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        layout.setContentsMargins(2, 2, 2, 2)  # Minimal margins for image wall effect
+        layout.setSpacing(2)
+        
+        # Sort controls placeholder (will be populated by main window)
+        self.sort_controls_widget = QWidget()
+        self.sort_controls_layout = QHBoxLayout(self.sort_controls_widget)
+        self.sort_controls_layout.setContentsMargins(5, 2, 5, 2)
+        self.sort_controls_layout.setSpacing(10)
+        layout.addWidget(self.sort_controls_widget)
         
         # Pagination controls
         self.pagination_widget = QWidget()
@@ -61,11 +77,19 @@ class PaginatedThumbnailGrid(QWidget):
         self.page_label = QLabel("Page 1 of 1")
         pagination_layout.addWidget(self.page_label)
         
+        # Thumbnail size selector
+        pagination_layout.addWidget(QLabel("Size:"))
+        self.size_combo = QComboBox()
+        self.size_combo.addItems(['Small', 'Medium', 'Large', 'Filename Only'])
+        self.size_combo.setCurrentText('Medium')  # Default
+        self.size_combo.currentTextChanged.connect(self._on_thumbnail_size_changed)
+        pagination_layout.addWidget(self.size_combo)
+        
         # Page size selector
-        pagination_layout.addWidget(QLabel("Items per page:"))
+        pagination_layout.addWidget(QLabel("Items:"))
         self.page_size_spin = QSpinBox()
-        self.page_size_spin.setRange(50, 500)
-        self.page_size_spin.setSingleStep(50)
+        self.page_size_spin.setRange(25, 500)
+        self.page_size_spin.setSingleStep(25)
         self.page_size_spin.setValue(self.items_per_page)
         self.page_size_spin.valueChanged.connect(self._on_page_size_changed)
         pagination_layout.addWidget(self.page_size_spin)
@@ -89,7 +113,7 @@ class PaginatedThumbnailGrid(QWidget):
         # Container widget for grid
         self.container = QWidget()
         self.grid_layout = QGridLayout(self.container)
-        self.grid_layout.setSpacing(10)
+        self.grid_layout.setSpacing(2)  # Minimal spacing for image wall effect
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
         
         self.scroll_area.setWidget(self.container)
@@ -186,6 +210,23 @@ class PaginatedThumbnailGrid(QWidget):
         self._update_pagination_controls()
         self._load_current_page()
     
+    def _on_thumbnail_size_changed(self, size_text: str):
+        """Handle thumbnail size change."""
+        size_key = size_text.lower().replace(' ', '')  # 'small', 'medium', 'large', 'filenameonly'
+        if size_key == 'filenameonly':
+            size_key = 'filename'
+        
+        print(f"[DEBUG] Thumbnail size changed to {size_key}")
+        self.thumbnail_size_mode = size_key
+        
+        # Update thumbnail cache with new size
+        if size_key in self.THUMBNAIL_SIZES:
+            new_size = self.THUMBNAIL_SIZES[size_key]
+            self.thumbnail_cache = ThumbnailCache(thumbnail_size=new_size)
+        
+        # Reload current page with new size
+        self._load_current_page()
+    
     def _load_current_page(self):
         """Load thumbnails for the current page."""
         self._clear_grid()
@@ -199,10 +240,29 @@ class PaginatedThumbnailGrid(QWidget):
         
         print(f"[DEBUG] Loading page {self.current_page + 1}: images {start_idx} to {end_idx}")
         
+        # Handle filename-only mode
+        if self.thumbnail_size_mode == 'filename':
+            for i, metadata in enumerate(page_images):
+                label = QLabel(metadata.file_name)
+                label.setStyleSheet("""
+                    QLabel {
+                        padding: 5px;
+                        border: 1px solid #444;
+                        background-color: #2a2a2a;
+                    }
+                    QLabel:hover {
+                        background-color: #3a3a3a;
+                    }
+                """)
+                label.setWordWrap(True)
+                label.mousePressEvent = lambda e, path=metadata.file_path: self._on_filename_clicked(path)
+                self.grid_layout.addWidget(label, i, 0)
+            return
+        
         columns = self._calculate_columns()
         
         for i, metadata in enumerate(page_images):
-            thumbnail = ThumbnailLabel(metadata)
+            thumbnail = ThumbnailLabel(metadata, size_mode=self.thumbnail_size_mode)
             thumbnail.clicked.connect(self._on_thumbnail_clicked)
             
             row = i // columns
@@ -212,6 +272,10 @@ class PaginatedThumbnailGrid(QWidget):
             
             # Load thumbnail with persistence cache
             self._load_thumbnail(thumbnail, metadata.file_path)
+    
+    def _on_filename_clicked(self, file_path: str):
+        """Handle filename label click."""
+        self.image_selected.emit(file_path)
     
     def _clear_grid(self):
         """Clear all thumbnails from the grid."""
@@ -224,9 +288,13 @@ class PaginatedThumbnailGrid(QWidget):
         self.selected_path = None
     
     def _calculate_columns(self) -> int:
-        """Calculate number of columns based on available width."""
+        """Calculate number of columns based on available width and thumbnail size."""
         available_width = max(self.scroll_area.viewport().width() - 20, 100)
-        thumbnail_width = 220  # 200 + margins
+        
+        # Get thumbnail width based on current size mode
+        size = self.THUMBNAIL_SIZES.get(self.thumbnail_size_mode, (150, 150))
+        thumbnail_width = size[0] + 4  # Minimal spacing for image wall effect
+        
         columns = max(1, available_width // thumbnail_width)
         return columns
     
@@ -294,8 +362,10 @@ class PaginatedThumbnailGrid(QWidget):
     
     def _set_thumbnail_pixmap(self, thumbnail: 'ThumbnailLabel', pixmap: QPixmap):
         """Set pixmap on thumbnail with proper scaling."""
+        # Get size based on thumbnail's size mode
+        size = thumbnail.SIZE_DIMENSIONS.get(thumbnail.size_mode, 170) - 20  # Subtract border/padding
         scaled = pixmap.scaled(
-            200, 200,
+            size, size,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation
         )
@@ -329,6 +399,17 @@ class PaginatedThumbnailGrid(QWidget):
         self.total_pages = 0
         self._update_pagination_controls()
         self.status_label.setText("No images loaded")
+    
+    def set_sort_controls(self, widget: QWidget):
+        """Set the sort controls widget to display above the gallery."""
+        # Clear existing widgets
+        while self.sort_controls_layout.count():
+            item = self.sort_controls_layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+        
+        # Add new widget
+        self.sort_controls_layout.addWidget(widget)
 
 
 class ThumbnailLabel(QLabel):
@@ -336,11 +417,22 @@ class ThumbnailLabel(QLabel):
     
     clicked = pyqtSignal(str)  # Emits file_path
     
-    def __init__(self, metadata: ImageMetadata, parent=None):
+    # Size presets
+    SIZE_DIMENSIONS = {
+        'small': 120,
+        'medium': 170,
+        'large': 220
+    }
+    
+    def __init__(self, metadata: ImageMetadata, size_mode: str = 'medium', parent=None):
         super().__init__(parent)
         self.metadata = metadata
         self.file_path = metadata.file_path
-        self.setFixedSize(220, 220)
+        self.size_mode = size_mode
+        
+        # Set size based on mode
+        size = self.SIZE_DIMENSIONS.get(size_mode, 170)
+        self.setFixedSize(size, size)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet("""
             ThumbnailLabel {

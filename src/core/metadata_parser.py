@@ -2,9 +2,10 @@
 import json
 import re
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 from PIL import Image
 from PIL.ExifTags import TAGS
+from PyQt6.QtCore import QSettings
 
 from ..models.image_data import ImageMetadata
 
@@ -263,6 +264,8 @@ class MetadataParser:
     def _parse_comfyui_metadata(text_data: Dict[str, str], metadata: ImageMetadata) -> None:
         """Parse ComfyUI format metadata."""
         try:
+            workflow = None
+            
             # Parse workflow JSON - store as string to avoid SQLite issues
             if 'workflow' in text_data:
                 workflow_str = text_data['workflow']
@@ -281,6 +284,14 @@ class MetadataParser:
                     # Store as JSON string
                     metadata.extra_params['prompt_data'] = prompt_str
                     
+                    # Merge widgets_values from workflow into prompt_data
+                    if workflow and 'nodes' in workflow:
+                        for node in workflow['nodes']:
+                            node_id = str(node.get('id', ''))
+                            widgets = node.get('widgets_values', [])
+                            if node_id and widgets and node_id in prompt_data:
+                                prompt_data[node_id]['widgets_values'] = widgets
+                    
                     # Try to extract prompt text from ComfyUI nodes
                     MetadataParser._extract_comfyui_prompt(prompt_data, metadata)
                 except json.JSONDecodeError as e:
@@ -293,40 +304,138 @@ class MetadataParser:
     @staticmethod
     def _extract_comfyui_prompt(prompt_data: Dict, metadata: ImageMetadata) -> None:
         """Extract prompt text from ComfyUI prompt JSON structure."""
-        # ComfyUI stores prompt in nodes with class_type "CLIPTextEncode"
-        # The text is in the "text" input
+        # Get configured node ID and titles from settings
+        settings = QSettings("SDImageViewer", "Settings")
+        primary_node_id = settings.value("comfyui_primary_node_id", "")
+        primary_node = settings.value("comfyui_primary_node", "Full Prompt")
+        alt_nodes = settings.value("comfyui_alt_nodes", [])
+        if alt_nodes is None:
+            alt_nodes = []
+        if isinstance(alt_nodes, str):
+            alt_nodes = [alt_nodes] if alt_nodes else []
+        
+        # Build list of node titles to search for (primary first, then alternatives)
+        search_titles = [primary_node] + alt_nodes
         
         positive_prompts = []
         negative_prompts = []
+        found_prompt_node = False
         
+        # First, try to find node by ID (ID supersedes title)
+        if primary_node_id and primary_node_id in prompt_data:
+            node_data = prompt_data[primary_node_id]
+            if isinstance(node_data, dict):
+                # Try widgets_values first (from workflow format)
+                widgets_values = node_data.get('widgets_values', [])
+                if widgets_values and len(widgets_values) > 0:
+                    # Get the first widget value (usually the text)
+                    prompt_text = widgets_values[0]
+                    if isinstance(prompt_text, list) and len(prompt_text) > 0:
+                        prompt_text = prompt_text[0]
+                    if isinstance(prompt_text, str):
+                        # Remove escape characters from quotes
+                        prompt_text = prompt_text.replace('\\"', '"').replace("\\'", "'")
+                        metadata.prompt = prompt_text
+                        found_prompt_node = True
+                # Try inputs.text (from prompt API format)
+                if not found_prompt_node:
+                    inputs = node_data.get('inputs', {})
+                    text = inputs.get('text', '')
+                    if isinstance(text, str) and text:
+                        metadata.prompt = text.replace('\\"', '"').replace("\\'", "'")
+                        found_prompt_node = True
+                    elif isinstance(text, list) and len(text) > 0:
+                        # Handle case where text is a list
+                        text_val = text[0]
+                        if isinstance(text_val, str):
+                            metadata.prompt = text_val.replace('\\"', '"').replace("\\'", "'")
+                            found_prompt_node = True
+        
+        # If no node ID match, try to find nodes by configured titles
+        if not found_prompt_node:
+            for node_id, node_data in prompt_data.items():
+                if not isinstance(node_data, dict):
+                    continue
+                
+                # Check _meta for title
+                meta = node_data.get('_meta', {})
+                node_title = meta.get('title', '')
+                
+                # Check if this matches any of our search titles
+                for search_title in search_titles:
+                    if search_title.lower() in node_title.lower():
+                        # Found a matching node - extract from widgets_values first
+                        widgets_values = node_data.get('widgets_values', [])
+                        if widgets_values and len(widgets_values) > 0:
+                            # Get the first widget value (usually the text)
+                            prompt_text = widgets_values[0]
+                            if isinstance(prompt_text, list) and len(prompt_text) > 0:
+                                prompt_text = prompt_text[0]
+                            if isinstance(prompt_text, str):
+                                # Remove escape characters from quotes
+                                prompt_text = prompt_text.replace('\\"', '"').replace("\\'", "'")
+                                metadata.prompt = prompt_text
+                                found_prompt_node = True
+                                break
+                        
+                        # If no widgets_values, try inputs.text
+                        if not found_prompt_node:
+                            inputs = node_data.get('inputs', {})
+                            text = inputs.get('text', '')
+                            if isinstance(text, str) and text:
+                                metadata.prompt = text.replace('\\"', '"').replace("\\'", "'")
+                                found_prompt_node = True
+                                break
+                            elif isinstance(text, list) and len(text) > 0:
+                                text_val = text[0]
+                                if isinstance(text_val, str):
+                                    metadata.prompt = text_val.replace('\\"', '"').replace("\\'", "'")
+                                    found_prompt_node = True
+                                    break
+                
+                if found_prompt_node:
+                    break
+        
+        # If no configured node found, fall back to original logic
+        if not found_prompt_node:
+            for node_id, node_data in prompt_data.items():
+                if not isinstance(node_data, dict):
+                    continue
+                    
+                class_type = node_data.get('class_type', '')
+                inputs = node_data.get('inputs', {})
+                meta = node_data.get('_meta', {})
+                node_title = meta.get('title', '').lower()
+                
+                # Look for CLIP text encode nodes
+                if class_type in ['CLIPTextEncode', 'CLIPTextEncodeSDXL']:
+                    text = inputs.get('text', '')
+                    
+                    # Ensure text is a string (not a list or dict)
+                    if isinstance(text, (list, dict)):
+                        text = json.dumps(text)
+                    elif not isinstance(text, str):
+                        text = str(text)
+                    
+                    # Remove escape characters from quotes
+                    text = text.replace('\\"', '"').replace("\\'", "'")
+                    
+                    # Check if this is connected to a positive or negative input
+                    if 'negative' in node_title or text.startswith('negative:'):
+                        negative_prompts.append(text.replace('negative:', '').strip())
+                    else:
+                        positive_prompts.append(text)
+        
+        # Extract generation parameters from KSampler nodes
         for node_id, node_data in prompt_data.items():
             if not isinstance(node_data, dict):
                 continue
-                
+            
             class_type = node_data.get('class_type', '')
             inputs = node_data.get('inputs', {})
             
-            # Look for CLIP text encode nodes
-            if class_type in ['CLIPTextEncode', 'CLIPTextEncodeSDXL']:
-                text = inputs.get('text', '')
-                
-                # Ensure text is a string (not a list or dict)
-                if isinstance(text, (list, dict)):
-                    text = json.dumps(text)
-                elif not isinstance(text, str):
-                    text = str(text)
-                
-                # Check if this is connected to a positive or negative input
-                # This is a heuristic - we look at the node title or connections
-                node_title = inputs.get('title', '').lower()
-                
-                if 'negative' in node_title or text.startswith('negative:'):
-                    negative_prompts.append(text.replace('negative:', '').strip())
-                else:
-                    positive_prompts.append(text)
-            
-            # Also check for KSampler nodes to get generation params
-            elif class_type in ['KSampler', 'KSamplerAdvanced']:
+            # Check for KSampler nodes to get generation params
+            if class_type in ['KSampler', 'KSamplerAdvanced']:
                 steps = inputs.get('steps', 0)
                 cfg = inputs.get('cfg', 0.0)
                 seed = inputs.get('seed', 0)
@@ -342,8 +451,9 @@ class MetadataParser:
                 model_val = inputs.get('ckpt_name', '')
                 metadata.model = str(model_val) if model_val else ''
         
-        # Combine prompts
-        if positive_prompts:
-            metadata.prompt = '\n'.join(positive_prompts)
-        if negative_prompts:
-            metadata.negative_prompt = '\n'.join(negative_prompts)
+        # Combine prompts (only if we didn't find a configured node)
+        if not found_prompt_node:
+            if positive_prompts:
+                metadata.prompt = '\n'.join(positive_prompts)
+            if negative_prompts:
+                metadata.negative_prompt = '\n'.join(negative_prompts)

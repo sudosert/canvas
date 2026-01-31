@@ -238,12 +238,16 @@ class MetadataPanel(QWidget):
         self._set_value("cfg_str", str(metadata.cfg_scale) if metadata.cfg_scale else "-")
         self._set_value("seed_str", str(metadata.seed) if metadata.seed else "-")
         
-        # Update prompts
-        self.prompt_text.setText(metadata.prompt or "No prompt data")
-        self.neg_prompt_text.setText(metadata.negative_prompt or "No negative prompt")
+        # Update prompts - remove escape characters from quotes
+        prompt_text = (metadata.prompt or "No prompt data").replace('\\"', '"').replace("\\'", "'")
+        neg_prompt_text = (metadata.negative_prompt or "No negative prompt").replace('\\"', '"').replace("\\'", "'")
         
-        # Update raw metadata
-        self.raw_metadata_text.setText(metadata.raw_metadata or "No raw metadata available")
+        self.prompt_text.setText(prompt_text)
+        self.neg_prompt_text.setText(neg_prompt_text)
+        
+        # Update raw metadata - remove escape characters
+        raw_text = (metadata.raw_metadata or "No raw metadata available").replace('\\"', '"').replace("\\'", "'")
+        self.raw_metadata_text.setText(raw_text)
     
     def _set_value(self, attr_name: str, value: str):
         """Set the value label for a field."""

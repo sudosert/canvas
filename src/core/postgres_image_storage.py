@@ -130,9 +130,12 @@ class PostgresImageStorage:
                 return None
         
         try:
-            # Create Large Object
-            lo_oid = self.conn.lo_create(0)
-            lo = self.conn.lo_open(lo_oid, mode=psycopg2.extensions.LO_WRITE)
+            # Create Large Object using psycopg2.extras
+            from psycopg2 import extras
+            
+            # Create a new large object
+            lo = self.conn.lobject(0, 'wb')
+            lo_oid = lo.oid
             
             # Write data in chunks to handle large files
             chunk_size = 1024 * 1024  # 1MB chunks
@@ -225,7 +228,9 @@ class PostgresImageStorage:
                     return None
                 
                 lo_oid = row[0]
-                lo = self.conn.lo_open(lo_oid, mode=psycopg2.extensions.LO_READ)
+                
+                # Open large object for reading using lobject
+                lo = self.conn.lobject(lo_oid, 'rb')
                 
                 # Read in chunks
                 chunks = []
@@ -321,8 +326,9 @@ class PostgresImageStorage:
                 row = cur.fetchone()
                 
                 if row and row[0]:
-                    # Unlink Large Object
-                    self.conn.lo_unlink(row[0])
+                    # Unlink Large Object using lobject
+                    lo = self.conn.lobject(row[0], 'n')
+                    lo.unlink()
                 
                 # Delete record
                 cur.execute(

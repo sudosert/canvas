@@ -215,10 +215,60 @@ class ImageStorage:
     
     def get_all_metadata(self) -> List[ImageMetadata]:
         """Get metadata for all stored images."""
-        cursor = self.conn.cursor()
-        cursor.execute('SELECT * FROM stored_images ORDER BY stored_at DESC')
-        return [self._row_to_metadata(row) for row in cursor.fetchall()]
-    
+        print("[DEBUG] ImageStorage.get_all_metadata() called")
+        try:
+            cursor = self.conn.cursor()
+            # Don't fetch image_data as it can be very large
+            cursor.execute('''
+                SELECT id, original_path, file_name, file_hash, file_size,
+                       width, height, prompt, negative_prompt, model, model_hash,
+                       sampler, steps, cfg_scale, seed, source, raw_metadata,
+                       extra_params, stored_at, original_deleted
+                FROM stored_images ORDER BY stored_at DESC
+            ''')
+            rows = cursor.fetchall()
+            print(f"[DEBUG] Query returned {len(rows)} rows")
+            result = [self._row_to_metadata(row) for row in rows]
+            print(f"[DEBUG] get_all_metadata() returned {len(result)} images")
+            return result
+        except Exception as e:
+            print(f"[ERROR] get_all_metadata() failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def get_image_details(self, original_path: str) -> Optional[Dict[str, Any]]:
+        """
+        Get additional details for a stored image.
+
+        Args:
+            original_path: Original file path of the image
+
+        Returns:
+            Dictionary with stored_at, original_deleted, file_size or None if not found
+        """
+        print(f"[DEBUG] get_image_details() called for: {original_path}")
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                'SELECT stored_at, original_deleted, file_size FROM stored_images WHERE original_path = ?',
+                (original_path,)
+            )
+            row = cursor.fetchone()
+            if row:
+                result = {
+                    'stored_at': row['stored_at'],
+                    'original_deleted': row['original_deleted'],
+                    'file_size': row['file_size']
+                }
+                print(f"[DEBUG] get_image_details() found: {result}")
+                return result
+            print("[DEBUG] get_image_details() - no row found")
+            return None
+        except Exception as e:
+            print(f"[ERROR] Failed to get image details: {e}")
+            return None
+
     def delete_image(self, original_path: str, delete_data: bool = True) -> bool:
         """
         Delete an image from storage.
@@ -334,6 +384,18 @@ class ImageStorage:
     def _row_to_metadata(self, row: sqlite3.Row) -> ImageMetadata:
         """Convert database row to ImageMetadata."""
         import json
+        import ast
+        
+        extra_params_raw = row['extra_params'] or '{}'
+        try:
+            extra_params = json.loads(extra_params_raw)
+        except json.JSONDecodeError:
+            # Try parsing as Python literal (handles single-quoted strings)
+            try:
+                extra_params = ast.literal_eval(extra_params_raw)
+            except (ValueError, SyntaxError):
+                extra_params = {}
+        
         return ImageMetadata(
             file_path=row['original_path'],
             file_name=row['file_name'],
@@ -351,7 +413,7 @@ class ImageStorage:
             seed=row['seed'],
             source=row['source'] or '',
             raw_metadata=row['raw_metadata'] or '',
-            extra_params=json.loads(row['extra_params'] or '{}')
+            extra_params=extra_params
         )
     
     def close(self):

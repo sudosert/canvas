@@ -1,9 +1,10 @@
 """Image viewer widget for displaying images at full resolution."""
 from typing import Optional
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QScrollArea, QSizePolicy
+    QWidget, QVBoxLayout, QLabel, QScrollArea, QSizePolicy,
+    QHBoxLayout, QPushButton, QComboBox
 )
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QPixmap, QKeyEvent, QWheelEvent, QMouseEvent
 
 from ..utils.image_cache import ImageCache
@@ -12,11 +13,19 @@ from ..utils.image_cache import ImageCache
 class ImageViewer(QWidget):
     """Widget for viewing images with zoom and pan support."""
     
+    zoom_mode_changed = pyqtSignal(str)  # Emits zoom mode when changed
+    
+    # Zoom modes
+    ZOOM_FIT = 'fit'
+    ZOOM_ACTUAL = 'actual'
+    ZOOM_CUSTOM = 'custom'
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_pixmap: Optional[QPixmap] = None
         self.current_file_path: Optional[str] = None
         self.zoom_level = 1.0
+        self.zoom_mode = self.ZOOM_FIT  # Default to fit
         self.image_cache = ImageCache(max_cache_size=10)
         
         self._setup_ui()
@@ -25,6 +34,97 @@ class ImageViewer(QWidget):
         """Set up the UI components."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Zoom controls toolbar
+        zoom_toolbar = QWidget()
+        zoom_layout = QHBoxLayout(zoom_toolbar)
+        zoom_layout.setContentsMargins(5, 2, 5, 2)
+        zoom_layout.setSpacing(5)
+        
+        # Zoom mode selector
+        zoom_layout.addWidget(QLabel("Zoom:"))
+        self.zoom_mode_combo = QComboBox()
+        self.zoom_mode_combo.addItems(['Fit to Window', 'Actual Size', 'Custom'])
+        self.zoom_mode_combo.setCurrentText('Fit to Window')
+        self.zoom_mode_combo.currentTextChanged.connect(self._on_zoom_mode_changed)
+        self.zoom_mode_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #2a2a2a;
+                color: #eee;
+                border: 1px solid #444;
+                padding: 3px;
+                border-radius: 4px;
+                min-width: 120px;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2a2a2a;
+                color: #eee;
+                selection-background-color: #4a9eff;
+            }
+        """)
+        zoom_layout.addWidget(self.zoom_mode_combo)
+        
+        # Zoom buttons (for custom mode)
+        self.zoom_out_btn = QPushButton("−")
+        self.zoom_out_btn.setFixedSize(28, 28)
+        self.zoom_out_btn.setToolTip("Zoom out")
+        self.zoom_out_btn.clicked.connect(self.zoom_out)
+        self.zoom_out_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                color: #eee;
+                border: 1px solid #555;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+            }
+        """)
+        zoom_layout.addWidget(self.zoom_out_btn)
+        
+        self.zoom_in_btn = QPushButton("+")
+        self.zoom_in_btn.setFixedSize(28, 28)
+        self.zoom_in_btn.setToolTip("Zoom in")
+        self.zoom_in_btn.clicked.connect(self.zoom_in)
+        self.zoom_in_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                color: #eee;
+                border: 1px solid #555;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+            }
+        """)
+        zoom_layout.addWidget(self.zoom_in_btn)
+        
+        self.zoom_reset_btn = QPushButton("Reset")
+        self.zoom_reset_btn.setToolTip("Reset zoom to fit")
+        self.zoom_reset_btn.clicked.connect(self.reset_zoom)
+        self.zoom_reset_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                color: #eee;
+                border: 1px solid #555;
+                padding: 3px 10px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+            }
+        """)
+        zoom_layout.addWidget(self.zoom_reset_btn)
+        
+        zoom_layout.addStretch()
+        layout.addWidget(zoom_toolbar)
         
         # Scroll area for image
         self.scroll_area = QScrollArea()
@@ -76,7 +176,6 @@ class ImageViewer(QWidget):
             file_path: Path to the image file
         """
         self.current_file_path = file_path
-        self.zoom_level = 1.0
         
         # Try to get from cache first
         pixmap = self.image_cache.get(file_path)
@@ -90,17 +189,14 @@ class ImageViewer(QWidget):
         if pixmap and not pixmap.isNull():
             self.current_pixmap = pixmap
             self._update_display()
-            self.info_label.setText(
-                f"{pixmap.width()}x{pixmap.height()} | "
-                f"Zoom: {int(self.zoom_level * 100)}%"
-            )
+            self._update_info()
         else:
             self.current_pixmap = None
             self.image_label.setText("Failed to load image")
             self.info_label.setText("Error loading image")
     
     def _update_display(self):
-        """Update the displayed image with current zoom level."""
+        """Update the displayed image with current zoom mode."""
         if not self.current_pixmap:
             return
         
@@ -109,7 +205,7 @@ class ImageViewer(QWidget):
         available_width = max(viewport_size.width() - 40, 100)
         available_height = max(viewport_size.height() - 40, 100)
         
-        if self.zoom_level == 1.0:
+        if self.zoom_mode == self.ZOOM_FIT:
             # Fit to window
             scaled = self.current_pixmap.scaled(
                 available_width,
@@ -117,8 +213,13 @@ class ImageViewer(QWidget):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation
             )
+            self.zoom_level = scaled.width() / self.current_pixmap.width()
+        elif self.zoom_mode == self.ZOOM_ACTUAL:
+            # Actual size (100%)
+            self.zoom_level = 1.0
+            scaled = self.current_pixmap
         else:
-            # Apply zoom
+            # Custom zoom
             new_size = QSize(
                 int(self.current_pixmap.width() * self.zoom_level),
                 int(self.current_pixmap.height() * self.zoom_level)
@@ -134,28 +235,57 @@ class ImageViewer(QWidget):
     
     def zoom_in(self):
         """Zoom in by 25%."""
+        self.zoom_mode = self.ZOOM_CUSTOM
+        self.zoom_mode_combo.setCurrentText('Custom')
         self.zoom_level = min(self.zoom_level * 1.25, 5.0)
         self._update_display()
         self._update_info()
     
     def zoom_out(self):
         """Zoom out by 25%."""
+        self.zoom_mode = self.ZOOM_CUSTOM
+        self.zoom_mode_combo.setCurrentText('Custom')
         self.zoom_level = max(self.zoom_level / 1.25, 0.1)
         self._update_display()
         self._update_info()
     
     def reset_zoom(self):
         """Reset zoom to fit window."""
-        self.zoom_level = 1.0
+        self.zoom_mode = self.ZOOM_FIT
+        self.zoom_mode_combo.setCurrentText('Fit to Window')
         self._update_display()
         self._update_info()
+    
+    def _on_zoom_mode_changed(self, mode_text: str):
+        """Handle zoom mode selection change."""
+        mode_map = {
+            'Fit to Window': self.ZOOM_FIT,
+            'Actual Size': self.ZOOM_ACTUAL,
+            'Custom': self.ZOOM_CUSTOM
+        }
+        self.zoom_mode = mode_map.get(mode_text, self.ZOOM_FIT)
+        
+        if self.zoom_mode == self.ZOOM_ACTUAL:
+            self.zoom_level = 1.0
+        elif self.zoom_mode == self.ZOOM_FIT:
+            self.zoom_level = 1.0  # Will be recalculated in _update_display
+        
+        self._update_display()
+        self._update_info()
+        self.zoom_mode_changed.emit(self.zoom_mode)
     
     def _update_info(self):
         """Update the info label."""
         if self.current_pixmap:
+            mode_text = {
+                self.ZOOM_FIT: "Fit",
+                self.ZOOM_ACTUAL: "100%",
+                self.ZOOM_CUSTOM: f"{int(self.zoom_level * 100)}%"
+            }.get(self.zoom_mode, f"{int(self.zoom_level * 100)}%")
+            
             self.info_label.setText(
                 f"{self.current_pixmap.width()}x{self.current_pixmap.height()} | "
-                f"Zoom: {int(self.zoom_level * 100)}%"
+                f"Zoom: {mode_text}"
             )
     
     def wheelEvent(self, event: QWheelEvent):
@@ -173,7 +303,7 @@ class ImageViewer(QWidget):
     def resizeEvent(self, event):
         """Handle resize to update image display."""
         super().resizeEvent(event)
-        if self.current_pixmap and self.zoom_level == 1.0:
+        if self.current_pixmap and self.zoom_mode == self.ZOOM_FIT:
             self._update_display()
     
     def clear(self):
