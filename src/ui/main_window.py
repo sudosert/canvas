@@ -13,12 +13,14 @@ from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 
 from ..core.image_scanner import ImageScanner
 from ..core.image_index import ImageIndex
+from ..core.metadata_cache import MetadataCache
 from ..models.image_data import ImageMetadata
 from .paginated_thumbnail_grid import PaginatedThumbnailGrid
 from .image_viewer import ImageViewer
 from .metadata_panel import MetadataPanel
 from .filter_bar import FilterBar
 from .slideshow_dialog import SlideshowDialog
+from .image_storage_dialog import ImageStorageDialog
 
 
 class MainWindow(QMainWindow):
@@ -31,6 +33,7 @@ class MainWindow(QMainWindow):
         
         # Initialize data
         self.image_index = ImageIndex()
+        self.metadata_cache = MetadataCache()
         self.current_folder: Optional[str] = None
         self.filtered_images: List[ImageMetadata] = []
         self.current_image_index: int = -1
@@ -42,6 +45,7 @@ class MainWindow(QMainWindow):
         
         # Load settings
         self.settings = QSettings("SDImageViewer", "Settings")
+        self.use_metadata_cache = self.settings.value("use_metadata_cache", False, type=bool)
         
         self._setup_ui()
         self._setup_menu()
@@ -174,6 +178,27 @@ class MainWindow(QMainWindow):
         slideshow_action.triggered.connect(self._show_slideshow_dialog)
         view_menu.addAction(slideshow_action)
         
+        view_menu.addSeparator()
+        
+        # Metadata cache toggle
+        self.cache_action = QAction("Use Metadata Cache", self)
+        self.cache_action.setCheckable(True)
+        self.cache_action.setChecked(self.use_metadata_cache)
+        self.cache_action.triggered.connect(self._toggle_metadata_cache)
+        view_menu.addAction(self.cache_action)
+        
+        # Clear cache action
+        clear_cache_action = QAction("Clear Metadata Cache", self)
+        clear_cache_action.triggered.connect(self._clear_metadata_cache)
+        view_menu.addAction(clear_cache_action)
+        
+        view_menu.addSeparator()
+        
+        # Image Storage Manager
+        storage_action = QAction("Image Storage Manager...", self)
+        storage_action.triggered.connect(self._show_storage_manager)
+        view_menu.addAction(storage_action)
+        
         # Help menu
         help_menu = menubar.addMenu("&Help")
         
@@ -292,9 +317,27 @@ class MainWindow(QMainWindow):
         scanner = ImageScanner(progress_callback=progress_callback)
         
         try:
-            print("[DEBUG] Starting scan...")
-            images = scanner.scan_directory(folder)
-            print(f"[DEBUG] Scan complete, got {len(images)} images")
+            images = None
+            
+            # Try to load from cache if enabled
+            if self.use_metadata_cache:
+                print("[DEBUG] Attempting to load from metadata cache...")
+                cached_images = self.metadata_cache.load_cache(folder)
+                if cached_images is not None:
+                    images = cached_images
+                    print(f"[DEBUG] Loaded {len(images)} images from cache")
+                    progress.setValue(count)  # Complete progress
+            
+            # If not cached, scan the directory
+            if images is None:
+                print("[DEBUG] Starting scan...")
+                images = scanner.scan_directory(folder)
+                print(f"[DEBUG] Scan complete, got {len(images)} images")
+                
+                # Save to cache if enabled
+                if self.use_metadata_cache and not progress.wasCanceled():
+                    print("[DEBUG] Saving to metadata cache...")
+                    self.metadata_cache.save_cache(folder, images)
             
             if not progress.wasCanceled():
                 print("[DEBUG] Adding images to index...")
@@ -305,8 +348,9 @@ class MainWindow(QMainWindow):
                 # Apply filters and update UI
                 self._apply_filters()
                 
+                cache_status = " (cached)" if self.use_metadata_cache else ""
                 self.status_bar.showMessage(
-                    f"Loaded {len(images)} images from {folder}",
+                    f"Loaded {len(images)} images{cache_status} from {folder}",
                     5000
                 )
                 print("[DEBUG] Load complete")
@@ -320,7 +364,38 @@ class MainWindow(QMainWindow):
                 f"Failed to load images:\n{str(e)}"
             )
         
-        progress.close()
+        progress.close() 
+    
+    def _toggle_metadata_cache(self, enabled: bool):
+        """Toggle metadata caching on/off."""
+        self.use_metadata_cache = enabled
+        self.settings.setValue("use_metadata_cache", enabled)
+        self.cache_action.setChecked(enabled)
+        
+        status = "enabled" if enabled else "disabled"
+        self.status_bar.showMessage(f"Metadata cache {status}", 3000)
+        print(f"[DEBUG] Metadata cache {status}")
+    
+    def _clear_metadata_cache(self):
+        """Clear all metadata caches."""
+        reply = QMessageBox.question(
+            self,
+            "Clear Cache",
+            "Are you sure you want to clear all metadata caches?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            if self.metadata_cache.clear_cache():
+                self.status_bar.showMessage("Metadata cache cleared", 3000)
+            else:
+                self.status_bar.showMessage("Failed to clear cache", 3000)
+    
+    def _show_storage_manager(self):
+        """Show the image storage manager dialog."""
+        dialog = ImageStorageDialog(self)
+        dialog.exec()
     
     def _apply_filters(self):
         """Apply current filter settings."""
