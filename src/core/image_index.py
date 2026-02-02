@@ -1,4 +1,5 @@
 """SQLite-based image index for fast filtering and retrieval."""
+import ast
 import sqlite3
 import json
 import os
@@ -322,8 +323,6 @@ class ImageIndex:
     
     def _row_to_metadata(self, row: sqlite3.Row) -> ImageMetadata:
         """Convert a database row to ImageMetadata."""
-        import ast
-        
         extra_params_raw = row['extra_params'] or '{}'
         try:
             extra_params = json.loads(extra_params_raw)

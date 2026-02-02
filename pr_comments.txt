@@ -1,0 +1,173 @@
+# Pull Request Comments
+
+**PR:** #3 - Improve browsing experience: add sorting options, rename Thumbnails t…
+**Author:** @sudosert
+**URL:** https://github.com/sudosert/canvas/pull/3
+
+---
+
+## PR Description
+
+…o Gallery, add zoom controls, allow pane collapse
+
+- Add sorting by date (default), path, dimensions, file size, or random with reverse option
+- Move sort controls above the gallery window
+- Rename 'Thumbnails' tab to 'Gallery'
+- Modify Browse tab to view individual folders with subfolder toggle
+- Add zoom options to image viewer: fit to window (default), actual size, custom zoom
+- Allow collapse of metadata and gallery/browse panes via splitter
+- Date sorting defaults to newest first, reverse shows oldest first
+
+---
+
+## Comments and Reviews
+
+### General Comments
+
+
+============================================================
+Comment by @kiloconnect[bot] on 2026-01-31 15:59 UTC
+============================================================
+<!-- kilo-review -->
+## Code Review Summary
+
+**Status:** 1 Issue Found | **Recommendation:** Address before merge
+
+### Overview
+| Severity | Count |
+|----------|-------|
+| CRITICAL | 0 |
+| WARNING | 1 |
+| SUGGESTION | 0 |
+
+<details>
+<summary><b>Issue Details (click to expand)</b></summary>
+
+#### WARNING
+| File | Line | Issue |
+|------|------|-------|
+| [`src/core/image_index.py`](https://github.com/sudosert/canvas/pull/3/files#diff-8e9c9c8f8e9c9c8f8e9c9c8f8e9c9c8fR325) | 325 | Import inside method - `ast` imported in frequently-called `_row_to_metadata()` method |
+
+</details>
+
+<details>
+<summary><b>Files Reviewed (10 files)</b></summary>
+
+- `.gitignore` - ✅ No new issues (previous issue fixed)
+- `README.md` - ✅ No issues
+- `requirements.txt` - ✅ No issues
+- `src/core/image_index.py` - ⚠️ 1 warning (import efficiency)
+- `src/core/image_storage.py` - ✅ No issues
+- `src/ui/paginated_thumbnail_grid.py` - ✅ No issues
+- `src/ui/settings_dialog.py` - ✅ No issues
+- `src/ui/splash_screen.py` - ✅ No issues
+- `tests/test_metadata_parser.py` - ⚠️ Duplicate code still present (previously reported)
+
+</details>
+
+---
+
+[Fix these issues in Kilo Cloud](https://app.kilo.ai/cloud-agent-fork/review/0ede10b8-7792-4b6a-baa5-ee2ebc324947)
+
+[Comment ID: 3828753815]
+### Code Review Comments
+
+
+============================================================
+Review Comment by @kiloconnect[bot] on 2026-01-31 15:59 UTC
+============================================================
+**SUGGESTION:** Missing newline at end of file
+
+The file should end with a newline character. This is a common convention and some tools may not handle files without trailing newlines correctly.
+
+```suggestion
+TODO
+```
+
+[Comment ID: 2749699268]
+[File: .gitignore]
+
+============================================================
+Review Comment by @kiloconnect[bot] on 2026-01-31 15:59 UTC
+============================================================
+**WARNING:** Duplicate code block detected
+
+Lines 118-199 are an exact duplicate of lines 40-117. This appears to be an accidental copy-paste. The duplicate section should be removed to avoid confusion and maintain code quality.
+
+[Comment ID: 2749699269]
+[File: tests/test_metadata_parser.py]
+
+============================================================
+Review Comment by @kiloconnect[bot] on 2026-01-31 16:15 UTC
+============================================================
+**CRITICAL:** SQL injection vulnerability - `sort_by` parameter is not validated
+
+The `sort_by` parameter is directly interpolated into the SQL query using f-strings without validation. An attacker could pass malicious SQL code through this parameter.
+
+**Recommendation:** Add input validation before the if/elif chain:
+
+```python
+ALLOWED_SORT_FIELDS = {'path', 'date', 'dimensions', 'file_size', 'random'}
+if sort_by not in ALLOWED_SORT_FIELDS:
+    sort_by = 'path'  # Default to safe value
+```
+
+This same validation should be applied at lines 244, 247, and 252 where f-strings are used with `order_direction`.
+
+[Comment ID: 2749709046]
+[File: src/core/image_index.py, Line: 262]
+
+============================================================
+Review Comment by @sudosert on 2026-02-02 04:17 UTC
+============================================================
+Resolved
+
+[Comment ID: 2752482285]
+[File: .gitignore]
+
+============================================================
+Review Comment by @sudosert on 2026-02-02 04:17 UTC
+============================================================
+**SQL Injection Vulnerability (CRITICAL)**: Fixed by adding `ALLOWED_SORT_FIELDS` validation in `src/core/image_index.py`. The `sort_by` parameter is now validated against a whitelist before being used in SQL queries.
+
+[Comment ID: 2752482746]
+[File: src/core/image_index.py, Line: 262]
+
+============================================================
+Review Comment by @sudosert on 2026-02-02 04:19 UTC
+============================================================
+Removed the duplicate code section (lines 118-199) from `tests/test_metadata_parser.py` that was an exact copy of lines 40-117.
+
+[Comment ID: 2752484749]
+[File: tests/test_metadata_parser.py]
+
+============================================================
+Review Comment by @kiloconnect[bot] on 2026-02-02 04:33 UTC
+============================================================
+**WARNING:** Import inside method
+
+Importing `ast` inside `_row_to_metadata()` is inefficient since this method is called for every database row. Move the import to the top of the file with other imports.
+
+```python
+import ast
+import json
+import sqlite3
+from typing import List, Optional
+from ..models.image_data import ImageMetadata
+```
+
+[Comment ID: 2752510251]
+[File: src/core/image_index.py, Line: 325]
+
+---
+
+## Summary
+
+- **Total Comments:** 8
+- **General Comments:** 1
+- **Reviews:** 0
+- **Code Review Comments:** 7
+
+---
+
+*Generated for use as AI prompt context*

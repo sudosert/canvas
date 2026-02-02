@@ -1,0 +1,8 @@
+Loading indicators during cache loading and sort changes
+Better parsing of ComfyUI metadata to find prompt and other data
+Generate image from prompt option
+Collections based on filters, path or custom tags
+Vaults for keeping file data in the db while removing it from the disk and marking the db entries as locked to prevent orphan removal
+Open file location, zip selected, delete selected from disk/db (with confirmation)
+Video support
+Web front end that can also query the same database sources
