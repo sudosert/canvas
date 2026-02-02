@@ -182,6 +182,9 @@ class ImageIndex:
         cursor.execute('SELECT * FROM images ORDER BY file_path')
         return [self._row_to_metadata(row) for row in cursor.fetchall()]
     
+    # Allowed sort fields to prevent SQL injection
+    ALLOWED_SORT_FIELDS = {'path', 'date', 'dimensions', 'file_size', 'random'}
+    
     def filter_images(
         self,
         include_terms: List[str] = None,
@@ -189,7 +192,8 @@ class ImageIndex:
         model: str = None,
         source: str = None,
         sort_by: str = 'path',
-        reverse: bool = False
+        reverse: bool = False,
+        orientation: dict = None
     ) -> List[ImageMetadata]:
         """
         Filter images based on criteria.
@@ -201,6 +205,7 @@ class ImageIndex:
             source: Filter by source (a1111, comfyui, unknown)
             sort_by: Sort field - 'path', 'date', 'dimensions', 'file_size', 'random'
             reverse: Reverse sort order
+            orientation: Dict with 'portrait', 'landscape', 'square' boolean keys
             
         Returns:
             List of matching ImageMetadata objects
@@ -231,6 +236,23 @@ class ImageIndex:
         if source:
             query += ' AND source = ?'
             params.append(source)
+        
+        # Orientation filter
+        if orientation:
+            orientation_conditions = []
+            if orientation.get('portrait'):
+                orientation_conditions.append('(height > width)')
+            if orientation.get('landscape'):
+                orientation_conditions.append('(width > height)')
+            if orientation.get('square'):
+                orientation_conditions.append('(width = height)')
+            
+            if orientation_conditions:
+                query += ' AND (' + ' OR '.join(orientation_conditions) + ')'
+        
+        # Validate sort_by to prevent SQL injection
+        if sort_by not in self.ALLOWED_SORT_FIELDS:
+            sort_by = 'path'  # Default to safe value
         
         # Apply sorting
         # For date, default is newest first (DESC), reverse is oldest first (ASC)

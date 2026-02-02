@@ -6,7 +6,8 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QFileDialog, QMessageBox, QProgressDialog,
-    QMenuBar, QMenu, QToolBar, QStatusBar, QLabel, QProgressBar, QTabWidget
+    QMenuBar, QMenu, QToolBar, QStatusBar, QLabel, QProgressBar, QTabWidget,
+    QPushButton
 )
 from PyQt6.QtCore import Qt, QSettings, QTimer
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
@@ -25,6 +26,7 @@ from .image_storage_dialog import ImageStorageDialog
 from .folder_loader import FolderLoaderThread
 from .filesystem_browser import FilesystemBrowser
 from .settings_dialog import SettingsDialog
+from .collections_panel import CollectionsPanel
 
 
 class MainWindow(QMainWindow):
@@ -52,6 +54,7 @@ class MainWindow(QMainWindow):
         self.slideshow_position = 0
         self.loader_thread: Optional[FolderLoaderThread] = None
         self.loading_progress_bar: Optional[QProgressBar] = None
+        self._current_image_path: Optional[str] = None
         
         # Load settings
         self.settings = QSettings("SDImageViewer", "Settings")
@@ -105,17 +108,76 @@ class MainWindow(QMainWindow):
         self.filesystem_browser.file_selected.connect(self._on_filesystem_file_selected)
         self.left_tabs.addTab(self.filesystem_browser, "📁 Browse")
         
-        splitter.addWidget(self.left_tabs)
+        # Collections tab
+        self.collections_panel = CollectionsPanel()
+        self.left_tabs.addTab(self.collections_panel, "📚 Collections")
+        
+        # Gallery container with collapse button
+        self.gallery_container = QWidget()
+        gallery_layout = QHBoxLayout(self.gallery_container)
+        gallery_layout.setContentsMargins(0, 0, 0, 0)
+        gallery_layout.setSpacing(0)
+        
+        # Collapse/expand button
+        self.gallery_toggle_btn = QPushButton("◀")
+        self.gallery_toggle_btn.setFixedWidth(20)
+        self.gallery_toggle_btn.setToolTip("Collapse gallery panel")
+        self.gallery_toggle_btn.clicked.connect(self._toggle_gallery_panel)
+        self.gallery_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #888;
+                border: none;
+                font-size: 10px;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+                color: #fff;
+            }
+        """)
+        gallery_layout.addWidget(self.gallery_toggle_btn)
+        gallery_layout.addWidget(self.left_tabs)
+        
+        splitter.addWidget(self.gallery_container)
         
         # Middle: Image viewer
         self.image_viewer = ImageViewer()
         self.image_viewer.setMinimumWidth(300)
         splitter.addWidget(self.image_viewer)
         
-        # Right: Metadata panel
+        # Right: Metadata panel with collapse button
+        self.metadata_container = QWidget()
+        metadata_layout = QHBoxLayout(self.metadata_container)
+        metadata_layout.setContentsMargins(0, 0, 0, 0)
+        metadata_layout.setSpacing(0)
+        
+        # Collapse/expand button
+        self.metadata_toggle_btn = QPushButton("◀")
+        self.metadata_toggle_btn.setFixedWidth(20)
+        self.metadata_toggle_btn.setToolTip("Collapse metadata panel")
+        self.metadata_toggle_btn.clicked.connect(self._toggle_metadata_panel)
+        self.metadata_toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2a2a2a;
+                color: #888;
+                border: none;
+                font-size: 10px;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: #3a3a3a;
+                color: #fff;
+            }
+        """)
+        metadata_layout.addWidget(self.metadata_toggle_btn)
+        
+        # Metadata panel
         self.metadata_panel = MetadataPanel()
         self.metadata_panel.setMinimumWidth(300)
-        splitter.addWidget(self.metadata_panel)
+        metadata_layout.addWidget(self.metadata_panel)
+        
+        splitter.addWidget(self.metadata_container)
         
         # Set stretch factors for equal resizing
         splitter.setStretchFactor(0, 1)  # Thumbnail grid - equal
@@ -142,6 +204,12 @@ class MainWindow(QMainWindow):
         self.status_bar.addPermanentWidget(self.loading_progress_bar)
         
         self.status_bar.showMessage("Ready")
+        
+        # Connect collections panel signals (after status_bar is created)
+        self.collections_panel.apply_collection_filters.connect(self._on_collection_filters_applied)
+        self.collections_panel.set_thumbnail_requested.connect(self._on_set_collection_thumbnail)
+        self.collections_panel.status_message.connect(self.status_bar.showMessage)
+        self.collections_panel.switch_to_gallery.connect(lambda: self.left_tabs.setCurrentIndex(0))
         
         # Set dark theme
         self.setStyleSheet("""
@@ -370,6 +438,7 @@ class MainWindow(QMainWindow):
     def _on_loading_progress(self, current: int, total: int, message: str):
         """Handle loading progress updates."""
         self.status_bar.showMessage(message)
+        self.loading_progress_bar.setVisible(True)
         if total > 0:
             self.loading_progress_bar.setRange(0, total)
             self.loading_progress_bar.setValue(current)
@@ -584,9 +653,28 @@ class MainWindow(QMainWindow):
         exclude_terms = self.filter_bar.get_exclude_terms()
         sort_by = self.filter_bar.get_sort_by()
         reverse = self.filter_bar.get_reverse_sort()
+        orientation = self.filter_bar.get_orientation_filters()
         print(f"[DEBUG] Include terms: {include_terms}")
         print(f"[DEBUG] Exclude terms: {exclude_terms}")
         print(f"[DEBUG] Sort by: {sort_by}, Reverse: {reverse}")
+        print(f"[DEBUG] Orientation: {orientation}")
+        
+        # Update collections panel with current filters
+        self.collections_panel.update_current_filters(
+            include_terms=include_terms,
+            exclude_terms=exclude_terms,
+            sort_by=sort_by,
+            reverse_sort=reverse
+        )
+        
+        # Show loading indicator for sorting
+        self.status_bar.showMessage(f"Sorting images by {sort_by}...")
+        self.loading_progress_bar.setVisible(True)
+        self.loading_progress_bar.setRange(0, 0)  # Indeterminate
+        
+        # Process events to show loading indicator immediately
+        from PyQt6.QtCore import QCoreApplication
+        QCoreApplication.processEvents()
         
         # Get filtered and sorted images from index
         print("[DEBUG] Querying image index...")
@@ -594,7 +682,8 @@ class MainWindow(QMainWindow):
             include_terms=include_terms,
             exclude_terms=exclude_terms,
             sort_by=sort_by,
-            reverse=reverse
+            reverse=reverse,
+            orientation=orientation
         )
         print(f"[DEBUG] Got {len(self.filtered_images)} filtered images")
         
@@ -606,6 +695,9 @@ class MainWindow(QMainWindow):
         total = len(self.image_index.get_all_images())
         filtered = len(self.filtered_images)
         self.filter_bar.set_results_count(filtered, total)
+        
+        # Hide loading indicator
+        self.loading_progress_bar.setVisible(False)
         
         # Reset current index
         self.current_image_index = -1
@@ -649,6 +741,36 @@ class MainWindow(QMainWindow):
             self._load_folder(parent_folder)
             # Switch to gallery tab
             self.left_tabs.setCurrentIndex(0)
+    
+    def _on_collection_filters_applied(self, name: str, include_terms: list,
+                                       exclude_terms: list, sort_by: str, reverse: bool):
+        """Handle collection filter application."""
+        print(f"[DEBUG] Applying collection filters: {name}")
+        
+        # Set the filter bar values
+        self.filter_bar.include_input.setText(', '.join(include_terms))
+        self.filter_bar.exclude_input.setText(', '.join(exclude_terms))
+        
+        # Set sort values if external controls exist
+        if hasattr(self.filter_bar, '_external_sort_combo'):
+            # Map sort_by value to display text
+            sort_display = {v: k for k, v in self.filter_bar.SORT_OPTIONS.items()}
+            self.filter_bar._external_sort_combo.setCurrentText(sort_display.get(sort_by, 'Date'))
+        if hasattr(self.filter_bar, '_external_reverse_checkbox'):
+            self.filter_bar._external_reverse_checkbox.setChecked(reverse)
+        
+        # Apply the filters
+        self._apply_filters()
+        
+        # Switch to gallery tab
+        self.left_tabs.setCurrentIndex(0)
+    
+    def _on_set_collection_thumbnail(self, collection_name: str):
+        """Handle request to set collection thumbnail from current image."""
+        if hasattr(self, '_current_image_path') and self._current_image_path:
+            self.collections_panel.set_collection_thumbnail(collection_name, self._current_image_path)
+        else:
+            self.status_bar.showMessage("Select an image first to set as thumbnail", 3000)
     
     def _populate_thumbnail_grid(self):
         """Populate thumbnail grid with current filtered images."""
@@ -696,6 +818,9 @@ class MainWindow(QMainWindow):
                 f"Image {index + 1} of {len(self.filtered_images)}: {metadata.file_name}"
             )
             print(f"[DEBUG] Successfully displayed image: {metadata.file_name}")
+            
+            # Store current image path for collections thumbnail feature
+            self._current_image_path = metadata.file_path
         except Exception as e:
             import traceback
             print(f"[ERROR] Failed to show image: {e}")
@@ -725,6 +850,34 @@ class MainWindow(QMainWindow):
             new_index = 0  # Wrap around
         
         self._show_image_at_index(new_index)
+    
+    def _toggle_metadata_panel(self):
+        """Toggle the metadata panel visibility."""
+        if self.metadata_panel.isVisible():
+            self.metadata_panel.hide()
+            self.metadata_toggle_btn.setText("▶")
+            self.metadata_toggle_btn.setToolTip("Expand metadata panel")
+            self.metadata_container.setFixedWidth(20)
+        else:
+            self.metadata_panel.show()
+            self.metadata_toggle_btn.setText("◀")
+            self.metadata_toggle_btn.setToolTip("Collapse metadata panel")
+            self.metadata_container.setMinimumWidth(320)
+            self.metadata_container.setMaximumWidth(16777215)  # QWIDGETSIZE_MAX
+    
+    def _toggle_gallery_panel(self):
+        """Toggle the gallery panel visibility."""
+        if self.left_tabs.isVisible():
+            self.left_tabs.hide()
+            self.gallery_toggle_btn.setText("▶")
+            self.gallery_toggle_btn.setToolTip("Expand gallery panel")
+            self.gallery_container.setFixedWidth(20)
+        else:
+            self.left_tabs.show()
+            self.gallery_toggle_btn.setText("◀")
+            self.gallery_toggle_btn.setToolTip("Collapse gallery panel")
+            self.gallery_container.setMinimumWidth(320)
+            self.gallery_container.setMaximumWidth(16777215)  # QWIDGETSIZE_MAX
     
     def _toggle_fullscreen(self):
         """Toggle fullscreen mode."""

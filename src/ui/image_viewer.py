@@ -1,4 +1,6 @@
 """Image viewer widget for displaying images at full resolution."""
+import os
+import subprocess
 from typing import Optional
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QSizePolicy,
@@ -124,6 +126,42 @@ class ImageViewer(QWidget):
         zoom_layout.addWidget(self.zoom_reset_btn)
         
         zoom_layout.addStretch()
+        
+        # Open file/folder buttons
+        self.open_image_btn = QPushButton("📄 Open Image")
+        self.open_image_btn.setToolTip("Open image file in default application")
+        self.open_image_btn.clicked.connect(self._open_image_file)
+        self.open_image_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                color: #eee;
+                border: 1px solid #555;
+                padding: 3px 10px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #4a9eff;
+            }
+        """)
+        zoom_layout.addWidget(self.open_image_btn)
+        
+        self.open_folder_btn = QPushButton("📁 Open Folder")
+        self.open_folder_btn.setToolTip("Open containing folder in file manager")
+        self.open_folder_btn.clicked.connect(self._open_containing_folder)
+        self.open_folder_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                color: #eee;
+                border: 1px solid #555;
+                padding: 3px 10px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #4a9eff;
+            }
+        """)
+        zoom_layout.addWidget(self.open_folder_btn)
+        
         layout.addWidget(zoom_toolbar)
         
         # Scroll area for image
@@ -312,3 +350,43 @@ class ImageViewer(QWidget):
         self.current_file_path = None
         self.image_label.clear()
         self.info_label.setText("No image loaded")
+    
+    def _open_image_file(self):
+        """Open the current image file in the default application."""
+        if self.current_file_path and os.path.exists(self.current_file_path):
+            try:
+                if os.name == 'nt':  # Windows
+                    os.startfile(self.current_file_path)
+                elif os.name == 'posix':  # Linux/macOS
+                    # Use Popen with stdout/stderr redirected to suppress portal warnings
+                    subprocess.Popen(
+                        ['xdg-open', self.current_file_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True
+                    )
+            except Exception as e:
+                print(f"[ERROR] Failed to open image file: {e}")
+        else:
+            print("[DEBUG] No image file to open")
+    
+    def _open_containing_folder(self):
+        """Open the folder containing the current image."""
+        if self.current_file_path:
+            folder_path = os.path.dirname(self.current_file_path)
+            if os.path.exists(folder_path):
+                try:
+                    if os.name == 'nt':  # Windows
+                        os.startfile(folder_path)
+                    elif os.name == 'posix':  # Linux/macOS
+                        # Use Popen with stdout/stderr redirected to suppress portal warnings
+                        subprocess.Popen(
+                            ['xdg-open', folder_path],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=True
+                        )
+                except Exception as e:
+                    print(f"[ERROR] Failed to open folder: {e}")
+        else:
+            print("[DEBUG] No folder to open")

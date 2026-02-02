@@ -74,8 +74,34 @@ class PaginatedThumbnailGrid(QWidget):
         
         pagination_layout.addStretch()
         
-        self.page_label = QLabel("Page 1 of 1")
-        pagination_layout.addWidget(self.page_label)
+        # Page navigation with editable page number
+        page_nav_layout = QHBoxLayout()
+        page_nav_layout.setSpacing(2)
+        
+        page_label = QLabel("Page")
+        page_nav_layout.addWidget(page_label)
+        
+        self.page_spin = QSpinBox()
+        self.page_spin.setRange(1, 1)
+        self.page_spin.setValue(1)
+        self.page_spin.setFixedWidth(60)
+        self.page_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_spin.valueChanged.connect(self._on_page_spin_changed)
+        self.page_spin.setStyleSheet("""
+            QSpinBox {
+                background-color: #2a2a2a;
+                color: #eee;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 3px;
+            }
+        """)
+        page_nav_layout.addWidget(self.page_spin)
+        
+        self.page_of_label = QLabel("of 1")
+        page_nav_layout.addWidget(self.page_of_label)
+        
+        pagination_layout.addLayout(page_nav_layout)
         
         # Thumbnail size selector
         pagination_layout.addWidget(QLabel("Size:"))
@@ -115,6 +141,7 @@ class PaginatedThumbnailGrid(QWidget):
         self.grid_layout = QGridLayout(self.container)
         self.grid_layout.setSpacing(2)  # Minimal spacing for image wall effect
         self.grid_layout.setContentsMargins(0, 0, 0, 0)
+        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         
         self.scroll_area.setWidget(self.container)
         layout.addWidget(self.scroll_area)
@@ -183,10 +210,24 @@ class PaginatedThumbnailGrid(QWidget):
     
     def _update_pagination_controls(self):
         """Update pagination button states and labels."""
-        self.page_label.setText(f"Page {self.current_page + 1} of {max(1, self.total_pages)}")
+        # Update spin box without triggering its signal
+        self.page_spin.blockSignals(True)
+        self.page_spin.setRange(1, max(1, self.total_pages))
+        self.page_spin.setValue(self.current_page + 1)
+        self.page_spin.blockSignals(False)
+        
+        self.page_of_label.setText(f"of {max(1, self.total_pages)}")
         self.prev_btn.setEnabled(self.current_page > 0)
         self.next_btn.setEnabled(self.current_page < self.total_pages - 1)
         self.page_changed.emit(self.current_page + 1, self.total_pages)
+    
+    def _on_page_spin_changed(self, page_number: int):
+        """Handle page number spin box change."""
+        target_page = page_number - 1  # Convert to 0-based index
+        if 0 <= target_page < self.total_pages and target_page != self.current_page:
+            self.current_page = target_page
+            self._update_pagination_controls()
+            self._load_current_page()
     
     def _go_to_previous_page(self):
         """Go to the previous page."""
@@ -295,6 +336,7 @@ class PaginatedThumbnailGrid(QWidget):
         size = self.THUMBNAIL_SIZES.get(self.thumbnail_size_mode, (150, 150))
         thumbnail_width = size[0] + 4  # Minimal spacing for image wall effect
         
+        # Calculate columns, minimum 1
         columns = max(1, available_width // thumbnail_width)
         return columns
     
