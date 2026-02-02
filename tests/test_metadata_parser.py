@@ -115,11 +115,10 @@ def test_comfyui_prompt_extraction():
     
     print(f"Extracted Prompt: {metadata2.prompt[:200]}..." if len(metadata2.prompt) > 200 else f"Extracted Prompt: {metadata2.prompt}")
     
-    print("=" * 80)
-    print("Testing ComfyUI Prompt Extraction")
-    print("=" * 80)
-    
-    # Print all nodes with their IDs and titles for reference
+    if "embedding:Illustrious/lazypos" in metadata2.prompt:
+        print("✓ PASS: Prompt extracted successfully via title")
+    else:
+        print("✗ FAIL: Prompt not found or incorrect via title")
     print("\n--- Available Nodes in Prompt Data ---")
     for node_id, node_data in sorted(prompt_data.items(), key=lambda x: int(x[0]) if x[0].isdigit() else 9999):
         if isinstance(node_data, dict):

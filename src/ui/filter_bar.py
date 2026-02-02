@@ -138,6 +138,70 @@ class FilterBar(QWidget):
         """)
         layout.addWidget(self.help_btn)
         
+        # Orientation filter checkboxes
+        orientation_label = QLabel("Orientation:")
+        layout.addWidget(orientation_label)
+        
+        self.portrait_checkbox = QCheckBox("Portrait")
+        self.portrait_checkbox.setChecked(True)
+        self.portrait_checkbox.stateChanged.connect(self._on_filter_changed)
+        self.portrait_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #eee;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                background-color: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 3px;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #4a9eff;
+            }
+        """)
+        layout.addWidget(self.portrait_checkbox)
+        
+        self.landscape_checkbox = QCheckBox("Landscape")
+        self.landscape_checkbox.setChecked(True)
+        self.landscape_checkbox.stateChanged.connect(self._on_filter_changed)
+        self.landscape_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #eee;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                background-color: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 3px;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #4a9eff;
+            }
+        """)
+        layout.addWidget(self.landscape_checkbox)
+        
+        self.square_checkbox = QCheckBox("Square")
+        self.square_checkbox.setChecked(True)
+        self.square_checkbox.stateChanged.connect(self._on_filter_changed)
+        self.square_checkbox.setStyleSheet("""
+            QCheckBox {
+                color: #eee;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                background-color: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 3px;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #4a9eff;
+            }
+        """)
+        layout.addWidget(self.square_checkbox)
+        
         # Results label
         self.results_label = QLabel("No images loaded")
         self.results_label.setStyleSheet("color: #888;")
@@ -301,10 +365,21 @@ class FilterBar(QWidget):
         text = self.exclude_input.text().strip()
         return self._parse_terms(text)
     
+    def get_orientation_filters(self) -> dict:
+        """Get orientation filter settings."""
+        return {
+            'portrait': self.portrait_checkbox.isChecked(),
+            'landscape': self.landscape_checkbox.isChecked(),
+            'square': self.square_checkbox.isChecked()
+        }
+    
     def clear_filters(self):
         """Clear all filter inputs."""
         self.include_input.clear()
         self.exclude_input.clear()
+        self.portrait_checkbox.setChecked(True)
+        self.landscape_checkbox.setChecked(True)
+        self.square_checkbox.setChecked(True)
         self._on_filter_changed()
     
     def set_results_count(self, count: int, total: int):

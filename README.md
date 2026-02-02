@@ -1,6 +1,6 @@
 # SD Image Viewer
 
-A desktop image viewer application tailored for Stable Diffusion generated images. It supports metadata extraction from A1111 and ComfyUI outputs, with advanced prompt-based filtering, fullscreen viewing, and slideshow modes.
+A desktop image viewer application tailored for Stable Diffusion generated images. It supports metadata extraction from A1111 and ComfyUI outputs, with advanced prompt-based filtering, fullscreen viewing, slideshow modes, and collections management.
 
 ## Features
 
@@ -15,11 +15,30 @@ A desktop image viewer application tailored for Stable Diffusion generated image
   - Real-time filtering as you type
   - Case-insensitive substring matching
 
+- **Orientation Filtering**: Filter images by aspect ratio
+  - Portrait (height > width)
+  - Landscape (width > height)
+  - Square (width = height)
+  - All filters can be toggled independently
+
+- **Collections**: Save and manage custom image groups
+  - Create collections from current filter results
+  - Edit collection names
+  - Delete collections
+  - Quick thumbnail preview for each collection
+  - Auto-switch to gallery view when loading collections
+
 - **Multiple View Modes**:
-  - Thumbnail grid for browsing
+  - Thumbnail grid for browsing with configurable pagination
   - Single image view with zoom support
   - Fullscreen mode (F11)
   - Slideshow with configurable timing
+
+- **Collapsible Interface**:
+  - Collapsible metadata panel on the right
+  - Collapsible gallery panel on the left
+  - Drag to resize panels
+  - Double-click splitter to collapse/expand
 
 - **Keyboard Navigation**:
   - Arrow keys: Previous/Next image
@@ -28,6 +47,10 @@ A desktop image viewer application tailored for Stable Diffusion generated image
   - Ctrl++ / Ctrl+-: Zoom in/out
   - Ctrl+0: Reset zoom
   - Escape: Exit fullscreen
+
+- **Loading Indicators**: Visual feedback during operations
+  - Shows loading status when scanning folders
+  - Displays progress when sorting images
 
 ## Installation
 
@@ -121,12 +144,22 @@ python src/main.py --reset --no-confirm --folder /path/to/images
 - **Exclude**: Enter terms separated by commas to hide images containing ANY term
   - Example: `nsfw, blurry` hides images with "nsfw" OR "blurry"
 
+- **Orientation**: Toggle portrait, landscape, and square checkboxes to filter by aspect ratio
+
+### Collections
+
+1. **Create a Collection**: Apply filters to show desired images, then click "Create Collection" and enter a name
+2. **View a Collection**: Click on any collection in the left sidebar to load its images
+3. **Edit a Collection**: Right-click on a collection and select "Edit Name" to rename it
+4. **Delete a Collection**: Right-click on a collection and select "Delete"
+
 ### Viewing Images
 
 - Click any thumbnail to view it in the main viewer
 - Use mouse wheel + Ctrl to zoom in/out
 - Double-click or press F11 for fullscreen
 - Use left/right arrow keys to navigate
+- Click "Open Image" or "Open Folder" buttons to open the file location in your system file manager
 
 ### Slideshow
 
@@ -140,6 +173,12 @@ python src/main.py --reset --no-confirm --folder /path/to/images
 In the metadata panel on the right:
 - Click "Copy Prompt" to copy the positive prompt
 - Click "Copy Negative Prompt" to copy the negative prompt
+
+### Pagination
+
+- Navigate pages using the previous/next buttons
+- Click on the page number field to directly enter a specific page
+- Page size is configurable in the application settings
 
 ## Supported Metadata Formats
 
@@ -164,7 +203,8 @@ sd-image-viewer/
 ├── src/
 │   ├── main.py                      # Application entry point with CLI
 │   ├── models/
-│   │   └── image_data.py            # Image metadata dataclass
+│   │   ├── image_data.py            # Image metadata dataclass
+│   │   └── collection.py            # Collection data model
 │   ├── core/
 │   │   ├── metadata_parser.py       # A1111/ComfyUI metadata extraction
 │   │   ├── image_scanner.py         # Directory scanning
@@ -181,7 +221,10 @@ sd-image-viewer/
 │   │   ├── metadata_panel.py        # Metadata display
 │   │   ├── filter_bar.py            # Filter controls
 │   │   ├── slideshow_dialog.py      # Slideshow controls
-│   │   └── image_storage_dialog.py  # Storage management UI
+│   │   ├── image_storage_dialog.py  # Storage management UI
+│   │   ├── collections_panel.py     # Collections sidebar
+│   │   ├── filesystem_browser.py    # Folder tree browser
+│   │   └── splash_screen.py         # Loading splash screen
 │   └── utils/
 │       └── image_cache.py           # Memory thumbnail cache
 ├── docs/
