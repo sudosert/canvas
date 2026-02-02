@@ -44,7 +44,10 @@ Thumbs.db
 settings.ini
 .requirements_installed
 
+
 # Personal
 plans/
 examples/
 scripts/
+TODO
+pr_comments.txt

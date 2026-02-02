@@ -1,4 +1,5 @@
 """SQLite-based image index for fast filtering and retrieval."""
+import ast
 import sqlite3
 import json
 import os
@@ -182,12 +183,18 @@ class ImageIndex:
         cursor.execute('SELECT * FROM images ORDER BY file_path')
         return [self._row_to_metadata(row) for row in cursor.fetchall()]
     
+    # Allowed sort fields to prevent SQL injection
+    ALLOWED_SORT_FIELDS = {'path', 'date', 'dimensions', 'file_size', 'random'}
+    
     def filter_images(
         self,
         include_terms: List[str] = None,
         exclude_terms: List[str] = None,
         model: str = None,
-        source: str = None
+        source: str = None,
+        sort_by: str = 'path',
+        reverse: bool = False,
+        orientation: dict = None
     ) -> List[ImageMetadata]:
         """
         Filter images based on criteria.
@@ -197,6 +204,9 @@ class ImageIndex:
             exclude_terms: Terms that must NOT be in prompt (case-insensitive)
             model: Filter by model name (partial match)
             source: Filter by source (a1111, comfyui, unknown)
+            sort_by: Sort field - 'path', 'date', 'dimensions', 'file_size', 'random'
+            reverse: Reverse sort order
+            orientation: Dict with 'portrait', 'landscape', 'square' boolean keys
             
         Returns:
             List of matching ImageMetadata objects
@@ -228,7 +238,41 @@ class ImageIndex:
             query += ' AND source = ?'
             params.append(source)
         
-        query += ' ORDER BY file_path'
+        # Orientation filter
+        if orientation:
+            orientation_conditions = []
+            if orientation.get('portrait'):
+                orientation_conditions.append('(height > width)')
+            if orientation.get('landscape'):
+                orientation_conditions.append('(width > height)')
+            if orientation.get('square'):
+                orientation_conditions.append('(width = height)')
+            
+            if orientation_conditions:
+                query += ' AND (' + ' OR '.join(orientation_conditions) + ')'
+        
+        # Validate sort_by to prevent SQL injection
+        if sort_by not in self.ALLOWED_SORT_FIELDS:
+            sort_by = 'path'  # Default to safe value
+        
+        # Apply sorting
+        # For date, default is newest first (DESC), reverse is oldest first (ASC)
+        # For other fields, default is ASC, reverse is DESC
+        if sort_by == 'date':
+            order_direction = 'ASC' if reverse else 'DESC'
+            query += f' ORDER BY modified_time {order_direction}'
+        elif sort_by == 'dimensions':
+            # Sort by total pixels (width * height)
+            order_direction = 'DESC' if reverse else 'ASC'
+            query += f' ORDER BY (width * height) {order_direction}'
+        elif sort_by == 'file_size':
+            order_direction = 'DESC' if reverse else 'ASC'
+            query += f' ORDER BY file_size {order_direction}'
+        elif sort_by == 'random':
+            query += ' ORDER BY RANDOM()'
+        else:  # path (default)
+            order_direction = 'DESC' if reverse else 'ASC'
+            query += f' ORDER BY file_path {order_direction}'
         
         cursor.execute(query, params)
         return [self._row_to_metadata(row) for row in cursor.fetchall()]
@@ -279,6 +323,16 @@ class ImageIndex:
     
     def _row_to_metadata(self, row: sqlite3.Row) -> ImageMetadata:
         """Convert a database row to ImageMetadata."""
+        extra_params_raw = row['extra_params'] or '{}'
+        try:
+            extra_params = json.loads(extra_params_raw)
+        except json.JSONDecodeError:
+            # Try parsing as Python literal (handles single-quoted strings)
+            try:
+                extra_params = ast.literal_eval(extra_params_raw)
+            except (ValueError, SyntaxError):
+                extra_params = {}
+        
         return ImageMetadata(
             file_path=row['file_path'],
             file_name=row['file_name'],
@@ -296,7 +350,7 @@ class ImageIndex:
             seed=row['seed'],
             source=row['source'] or '',
             raw_metadata=row['raw_metadata'] or '',
-            extra_params=json.loads(row['extra_params'] or '{}')
+            extra_params=extra_params
         )
     
     def close(self) -> None:
