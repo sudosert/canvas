@@ -13,6 +13,8 @@ from src.ui.main_window import MainWindow
 from src.ui.splash_screen import SplashScreen
 from src.core.metadata_cache import MetadataCache
 from src.core.thumbnail_persistence import ThumbnailPersistence
+from src.core.image_storage import ImageStorage
+from src.core.postgres_image_storage import PostgresImageStorage, POSTGRES_AVAILABLE
 
 
 def parse_args():
@@ -67,6 +69,17 @@ Examples:
     return parser.parse_args()
 
 
+def _print_progress(step: int, total: int, message: str):
+    """Print a progress indicator for the reset process."""
+    progress = int((step / total) * 100)
+    bar_width = 30
+    filled = int((step / total) * bar_width)
+    bar = "█" * filled + "░" * (bar_width - filled)
+    print(f"\r  [{bar}] {progress:3d}% - {message}", end="", flush=True)
+    if step == total:
+        print()  # New line when complete
+
+
 def clear_all_caches(no_confirm: bool = False) -> bool:
     """
     Clear all application caches.
@@ -90,6 +103,8 @@ def clear_all_caches(no_confirm: bool = False) -> bool:
             "This will clear all cached data:\n\n"
             "• Metadata cache (JSON files)\n"
             "• Thumbnail cache (disk thumbnails)\n"
+            "• Stored images (SQLite database)\n"
+            "• PostgreSQL storage (if configured)\n"
             "• Image index (in-memory, rebuilt on folder load)\n\n"
             "Are you sure you want to continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -102,25 +117,76 @@ def clear_all_caches(no_confirm: bool = False) -> bool:
     
     print("Clearing all caches...")
     
+    # Define total steps for progress tracking
+    total_steps = 4  # Metadata, Thumbnails, SQLite, PostgreSQL check
+    current_step = 0
+    
     # Clear metadata cache
+    current_step += 1
+    _print_progress(current_step, total_steps, "Clearing metadata cache...")
     try:
         metadata_cache = MetadataCache()
         if metadata_cache.clear_cache():
-            print("  ✓ Metadata cache cleared")
+            pass  # Progress already shown
         else:
-            print("  ✗ Failed to clear metadata cache")
+            print("\n  ✗ Failed to clear metadata cache")
     except Exception as e:
-        print(f"  ✗ Error clearing metadata cache: {e}")
+        print(f"\n  ✗ Error clearing metadata cache: {e}")
     
     # Clear thumbnail cache
+    current_step += 1
+    _print_progress(current_step, total_steps, "Clearing thumbnail cache...")
     try:
         thumbnail_persistence = ThumbnailPersistence()
         count = thumbnail_persistence.clear_cache()
-        print(f"  ✓ Thumbnail cache cleared ({count} files removed)")
     except Exception as e:
-        print(f"  ✗ Error clearing thumbnail cache: {e}")
+        print(f"\n  ✗ Error clearing thumbnail cache: {e}")
     
-    print("Cache reset complete. The image index will be rebuilt when you open a folder.")
+    # Clear SQLite image storage
+    current_step += 1
+    _print_progress(current_step, total_steps, "Clearing SQLite storage...")
+    try:
+        image_storage = ImageStorage()
+        if image_storage.clear_cache():
+            pass  # Progress already shown
+        else:
+            print("\n  ✗ Failed to clear SQLite image storage")
+        image_storage.close()
+    except Exception as e:
+        print(f"\n  ✗ Error clearing SQLite image storage: {e}")
+    
+    # Clear PostgreSQL storage if available
+    current_step += 1
+    _print_progress(current_step, total_steps, "Checking PostgreSQL...")
+    if POSTGRES_AVAILABLE:
+        try:
+            # Build connection string from environment variables
+            host = os.environ.get("POSTGRES_IP", "")
+            user = os.environ.get("POSTGRES_USER", "")
+            password = os.environ.get("POSTGRES_PASS", "")
+            database = os.environ.get("POSTGRES_DB", "sd_images")
+            port = os.environ.get("POSTGRES_PORT", "5432")
+            
+            if host and user and password:
+                conn_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+                try:
+                    postgres_storage = PostgresImageStorage(conn_string)
+                    if postgres_storage.is_connected():
+                        _print_progress(current_step, total_steps, "Clearing PostgreSQL...")
+                        if postgres_storage.clear_all():
+                            pass  # Success
+                        else:
+                            print("\n  ✗ Failed to clear PostgreSQL storage")
+                    else:
+                        _print_progress(current_step, total_steps, "PostgreSQL not connected")
+                    postgres_storage.close()
+                except Exception as conn_e:
+                    _print_progress(current_step, total_steps, f"PostgreSQL: {conn_e}")
+        except Exception as e:
+            print(f"\n  ✗ Error clearing PostgreSQL storage: {e}")
+    
+    _print_progress(total_steps, total_steps, "Complete!")
+    print("\nCache reset complete. The image index will be rebuilt when you open a folder.")
     return True
 
 

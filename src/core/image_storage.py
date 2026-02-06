@@ -416,6 +416,23 @@ class ImageStorage:
             extra_params=extra_params
         )
     
+    def clear_cache(self) -> bool:
+        """
+        Clear all stored images from the database.
+        
+        Returns:
+            True if cleared successfully
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('DELETE FROM stored_images')
+            self.conn.commit()
+            print(f"[DEBUG] Cleared SQLite image storage ({cursor.rowcount} images removed)")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Failed to clear image storage: {e}")
+            return False
+    
     def close(self):
         """Close database connection."""
         self.conn.close()

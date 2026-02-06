@@ -39,10 +39,14 @@ class PostgresImageStorage:
         if connection_string:
             self._connect()
     
-    def _connect(self):
-        """Establish database connection."""
+    def _connect(self, connect_timeout: int = 5):
+        """Establish database connection.
+        
+        Args:
+            connect_timeout: Connection timeout in seconds (default: 5)
+        """
         try:
-            self.conn = psycopg2.connect(self.connection_string)
+            self.conn = psycopg2.connect(self.connection_string, connect_timeout=connect_timeout)
             self._create_tables()
         except Exception as e:
             print(f"[ERROR] Failed to connect to PostgreSQL: {e}")
@@ -412,6 +416,43 @@ class PostgresImageStorage:
             raw_metadata=row['raw_metadata'] or '',
             extra_params=row.get('extra_params', {})
         )
+    
+    def clear_all(self) -> bool:
+        """
+        Clear all stored images from PostgreSQL.
+        
+        Returns:
+            True if cleared successfully
+        """
+        if not self.is_connected():
+            print("[DEBUG] PostgreSQL not connected, nothing to clear")
+            return True
+        
+        try:
+            with self.conn.cursor() as cur:
+                # Get all Large Object OIDs
+                cur.execute("SELECT lo_oid FROM stored_images WHERE lo_oid IS NOT NULL")
+                oids = [row[0] for row in cur.fetchall()]
+                
+                # Delete all records first
+                cur.execute("DELETE FROM stored_images")
+                
+                # Unlink Large Objects
+                for oid in oids:
+                    try:
+                        lo = self.conn.lobject(oid, 'n')
+                        lo.unlink()
+                    except Exception as e:
+                        print(f"[WARNING] Failed to unlink LO {oid}: {e}")
+                
+                self.conn.commit()
+                print(f"[DEBUG] Cleared PostgreSQL storage ({len(oids)} images removed)")
+                return True
+                
+        except Exception as e:
+            self.conn.rollback()
+            print(f"[ERROR] Failed to clear PostgreSQL storage: {e}")
+            return False
     
     def close(self):
         """Close database connection."""

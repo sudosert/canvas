@@ -28,7 +28,7 @@ if [ ! -d ".venv" ]; then
         echo -e "${RED}Error: Python is not installed or not in PATH${NC}"
         exit 1
     fi
-    
+
     # Create virtual environment
     $PYTHON_CMD -m venv .venv
     if [ $? -ne 0 ]; then

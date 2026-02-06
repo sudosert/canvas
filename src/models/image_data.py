@@ -21,6 +21,7 @@ class ImageMetadata:
     negative_prompt: str = ""
     model: str = ""
     model_hash: str = ""
+    loras: list[str] = field(default_factory=list)
     sampler: str = ""
     steps: int = 0
     cfg_scale: float = 0.0
@@ -84,6 +85,7 @@ class ImageMetadata:
             'negative_prompt': self.negative_prompt,
             'model': self.model,
             'model_hash': self.model_hash,
+            'loras': self.loras,
             'sampler': self.sampler,
             'steps': self.steps,
             'cfg_scale': self.cfg_scale,
@@ -114,6 +116,7 @@ class ImageMetadata:
             negative_prompt=data.get('negative_prompt', ''),
             model=data.get('model', ''),
             model_hash=data.get('model_hash', ''),
+            loras=data.get('loras', []),
             sampler=data.get('sampler', ''),
             steps=data.get('steps', 0),
             cfg_scale=data.get('cfg_scale', 0.0),

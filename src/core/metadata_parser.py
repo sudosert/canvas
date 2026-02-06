@@ -54,29 +54,61 @@ class MetadataParser:
         return metadata
     
     @staticmethod
+    def _add_lora(metadata: ImageMetadata, raw_name: str) -> None:
+        """Add a LoRA name to metadata, cleaning and deduping."""
+        if not raw_name:
+            return
+            
+        for name in str(raw_name).split(','):
+            name = name.strip()
+            name = name.strip(',')
+            name = name.strip()
+            
+            # Remove strength info (e.g., "(0.8)" or ":0.8")
+            # Handle (0.8) style
+            name = re.sub(r'\s*\([\d.]+\)$', '', name)
+            # Handle :0.8 style (A1111 prompt syntax)
+            name = re.sub(r':[\d.]+$', '', name)
+            
+            name = name.strip()
+            
+            if name and name not in metadata.loras:
+                metadata.loras.append(name)
+    
+    @staticmethod
     def _parse_png_metadata(img: Image.Image, metadata: ImageMetadata) -> None:
         """Parse PNG text chunks for metadata."""
         if not hasattr(img, 'text') and not hasattr(img, 'info'):
             return
-            
+
         # Get text chunks from PNG
         text_data = getattr(img, 'text', {}) or img.info.get('text', {})
-        
+
         # Store raw metadata
         metadata.raw_metadata = json.dumps(text_data, indent=2)
-        
-        # Check for A1111 format (parameters key)
+
+        # Check for ComfyUI format (workflow and prompt keys) - primary indicator
+        if 'workflow' in text_data or 'prompt' in text_data:
+            metadata.source = "comfyui"
+            # Also check for aodh_metadata (new format with embedded A1111 params)
+            if 'aodh_metadata' in text_data:
+                MetadataParser._parse_aodh_metadata(text_data, metadata)
+            else:
+                MetadataParser._parse_comfyui_metadata(text_data, metadata)
+            return
+
+        # Check for aodh_metadata (new format with embedded A1111 params)
+        if 'aodh_metadata' in text_data:
+            metadata.source = "comfyui"
+            MetadataParser._parse_aodh_metadata(text_data, metadata)
+            return
+
+        # Check for A1111 format (parameters key only)
         if 'parameters' in text_data:
             metadata.source = "a1111"
             MetadataParser._parse_a1111_parameters(text_data['parameters'], metadata)
             return
-            
-        # Check for ComfyUI format (workflow and prompt keys)
-        if 'workflow' in text_data or 'prompt' in text_data:
-            metadata.source = "comfyui"
-            MetadataParser._parse_comfyui_metadata(text_data, metadata)
-            return
-            
+
         # Check for other common metadata keys
         for key in ['Description', 'Comment', 'XML:com.adobe.xmp']:
             if key in text_data:
@@ -159,12 +191,69 @@ class MetadataParser:
         
         # Join prompt lines with commas (replace newlines with commas)
         metadata.prompt = ', '.join(prompt_lines)
+
+        # Extract LoRAs from prompt
+        # Pattern: <lora:model_name:multiplier>
+        lora_pattern = r'<lora:([^:>]+)(?::[^>]+)?>'
+        loras = re.findall(lora_pattern, metadata.prompt)
+        for lora in loras:
+             MetadataParser._add_lora(metadata, lora)
         
         # Join remaining lines and parse parameters
         param_text = ' '.join(lines[param_start_idx:]).strip()
         
         if param_text:
             MetadataParser._parse_a1111_param_line(param_text, metadata)
+            
+            # Check for Lora hashes in extra_params
+            if 'Lora hashes' in metadata.extra_params:
+                lora_hashes = metadata.extra_params['Lora hashes'].strip('"').strip("'")
+                # Format: "lora1: hash1, lora2: hash2"
+                for part in lora_hashes.split(','):
+                    if ':' in part:
+                        name = part.split(':')[0].strip()
+                        MetadataParser._add_lora(metadata, name)
+
+            # Check for Lora/Loras/lora keys
+            for key in ['Lora', 'Loras', 'lora']:
+                if key in metadata.extra_params:
+                    val = metadata.extra_params[key].strip('"').strip("'")
+                    
+                    # Try to parse as JSON first (some tools output JSON list of objects)
+                    names_to_process = []
+                    try:
+                        # Try parsing as is
+                        parsed = json.loads(val)
+                    except:
+                        try:
+                            # Try replacing escaped quotes if it looks like it might be JSON
+                            if '[' in val or '{' in val:
+                                cleaned_val = val.replace('\\"', '"')
+                                parsed = json.loads(cleaned_val)
+                            else:
+                                parsed = None
+                        except:
+                            parsed = None
+
+                    if parsed:
+                        if isinstance(parsed, list):
+                            for item in parsed:
+                                if isinstance(item, dict) and 'name' in item:
+                                    names_to_process.append(str(item['name']))
+                                elif isinstance(item, str):
+                                    names_to_process.append(item)
+                        elif isinstance(parsed, dict) and 'name' in parsed:
+                            names_to_process.append(str(parsed['name']))
+                        else:
+                            names_to_process = [val]
+                    else:
+                        names_to_process = [val]
+
+                    for raw_name in names_to_process:
+                        MetadataParser._add_lora(metadata, raw_name)
+                    
+                    # Remove the key from extra_params to avoid duplication (since we have the structured list now)
+                    del metadata.extra_params[key]
     
     @staticmethod
     def _parse_a1111_param_line(param_text: str, metadata: ImageMetadata) -> None:
@@ -177,7 +266,8 @@ class MetadataParser:
         known_keys = ['Steps', 'Sampler', 'CFG scale', 'Seed', 'Size', 'Model', 'Model hash',
                       'Clip skip', 'ENSD', 'RNG', 'Tiling', 'Restore faces', 'Hires upscale',
                       'Hires steps', 'Hires upscaler', 'Hires resize', 'Denoising strength',
-                      'Mask blur', 'Variation seed', 'Variation seed strength']
+                      'Mask blur', 'Variation seed', 'Variation seed strength', 'Lora hashes',
+                      'TI hashes', 'Hashes', 'Lora', 'Loras', 'lora', 'Version']
         
         # Build a more careful parser
         remaining = param_text
@@ -450,6 +540,12 @@ class MetadataParser:
             elif class_type in ['CheckpointLoaderSimple', 'CheckpointLoader']:
                 model_val = inputs.get('ckpt_name', '')
                 metadata.model = str(model_val) if model_val else ''
+
+            # Check for LoRA loader
+            elif class_type in ['LoraLoader', 'LoraLoaderModelOnly']:
+                lora_name = inputs.get('lora_name', '')
+                if lora_name:
+                    MetadataParser._add_lora(metadata, str(lora_name))
         
         # Combine prompts (only if we didn't find a configured node)
         if not found_prompt_node:
@@ -457,3 +553,148 @@ class MetadataParser:
                 metadata.prompt = '\n'.join(positive_prompts)
             if negative_prompts:
                 metadata.negative_prompt = '\n'.join(negative_prompts)
+
+    @staticmethod
+    def _parse_aodh_metadata(text_data: Dict[str, str], metadata: ImageMetadata) -> None:
+        """Parse aodh_metadata format which embeds A1111-style parameters."""
+        try:
+            aodh_str = text_data.get('aodh_metadata', '{}')
+            aodh_data = json.loads(aodh_str)
+
+            # Parse the embedded A1111-style parameters
+            if 'parameters' in aodh_data:
+                MetadataParser._parse_a1111_parameters(aodh_data['parameters'], metadata)
+
+            # Store the comfyui flag
+            if 'comfyui' in aodh_data:
+                metadata.extra_params['comfyui'] = aodh_data['comfyui']
+
+            # Parse comfyui_metadata if present (new format)
+            if 'comfyui_metadata' in aodh_data:
+                comfyui_meta = aodh_data['comfyui_metadata']
+
+                # Store workflow info
+                if 'workflow_name' in comfyui_meta:
+                    metadata.extra_params['workflow_name'] = comfyui_meta['workflow_name']
+                if 'workflow_version' in comfyui_meta:
+                    metadata.extra_params['workflow_version'] = comfyui_meta['workflow_version']
+
+                # Parse generation info
+                if 'generation' in comfyui_meta:
+                    gen = comfyui_meta['generation']
+                    if 'checkpoint' in gen and not metadata.model:
+                        metadata.model = gen['checkpoint']
+                    if 'vae' in gen:
+                        metadata.extra_params['vae'] = gen['vae']
+                    if 'clip_skip' in gen:
+                        metadata.extra_params['clip_skip'] = gen['clip_skip']
+                    if 'lora' in gen:
+                        lora_data = gen['lora']
+                        # Also add to main loras list
+                        if isinstance(lora_data, list):
+                            for lora in lora_data:
+                                raw_name = ""
+                                if isinstance(lora, dict) and 'name' in lora:
+                                    raw_name = str(lora['name'])
+                                elif isinstance(lora, str):
+                                    raw_name = lora
+                                
+                                MetadataParser._add_lora(metadata, raw_name)
+
+                # Parse sampling info - can override A1111 values if they're 0
+                if 'sampling' in comfyui_meta:
+                    samp = comfyui_meta['sampling']
+                    if metadata.steps == 0 and 'steps' in samp:
+                        metadata.steps = int(samp['steps'])
+                    if metadata.cfg_scale == 0.0 and 'cfg' in samp:
+                        metadata.cfg_scale = float(samp['cfg'])
+                    if metadata.seed == 0 and 'seed' in samp:
+                        metadata.seed = int(samp['seed'])
+                    if not metadata.sampler and 'sampler' in samp:
+                        metadata.sampler = samp['sampler']
+                    if 'scheduler' in samp:
+                        metadata.extra_params['scheduler'] = samp['scheduler']
+
+                # Parse resolution info
+                if 'resolution' in comfyui_meta:
+                    res = comfyui_meta['resolution']
+                    if 'width' in res and metadata.width == 0:
+                        metadata.width = int(res['width'])
+                    if 'height' in res and metadata.height == 0:
+                        metadata.height = int(res['height'])
+                    if 'upscale_factor' in res:
+                        metadata.extra_params['upscale_factor'] = res['upscale_factor']
+                    if 'upscaler' in res:
+                        metadata.extra_params['upscaler'] = res['upscaler']
+                    if 'hires_steps' in res:
+                        metadata.extra_params['hires_steps'] = res['hires_steps']
+                    if 'denoise_strength' in res:
+                        metadata.extra_params['denoise_strength'] = res['denoise_strength']
+
+                # Parse prompt structure
+                if 'prompt_structure' in comfyui_meta:
+                    ps = comfyui_meta['prompt_structure']
+                    if 'positive' in ps and 'full' in ps['positive']:
+                        metadata.extra_params['prompt_full'] = ps['positive']['full']
+                    if 'negative' in ps and 'full' in ps['negative']:
+                        metadata.extra_params['negative_full'] = ps['negative']['full']
+
+                # Parse post-processing
+                if 'post_processing' in comfyui_meta:
+                    pp = comfyui_meta['post_processing']
+                    if 'detailers' in pp:
+                        metadata.extra_params['detailers'] = json.dumps(pp['detailers'])
+                    if 'color_match' in pp:
+                        metadata.extra_params['color_match'] = json.dumps(pp['color_match'])
+
+                # Store workflow nodes reference
+                if 'workflow' in comfyui_meta:
+                    wf = comfyui_meta['workflow']
+                    if 'nodes' in wf:
+                        metadata.extra_params['workflow_nodes'] = json.dumps(wf['nodes'])
+                    if 'groups' in wf:
+                        metadata.extra_params['workflow_groups'] = json.dumps(wf['groups'])
+                    if 'execution' in wf:
+                        metadata.extra_params['workflow_execution'] = json.dumps(wf['execution'])
+
+            # Parse extended parameters if present (old format)
+            elif 'extended_params' in aodh_data:
+                extended = aodh_data['extended_params']
+                metadata.extra_params['extended_params'] = json.dumps(extended)
+
+                # Extract useful fields from extended params
+                if 'base_size' in extended:
+                    metadata.extra_params['base_size'] = extended['base_size']
+                if 'actual_size' in extended:
+                    actual_size = extended['actual_size']
+                    if 'x' in str(actual_size):
+                        try:
+                            w, h = str(actual_size).split('x')
+                            if metadata.width == 0:
+                                metadata.width = int(w)
+                            if metadata.height == 0:
+                                metadata.height = int(h)
+                        except:
+                            pass
+                if 'hires_fix_applied' in extended:
+                    metadata.extra_params['hires_fix_applied'] = extended['hires_fix_applied']
+                if 'detailing_info' in extended:
+                    metadata.extra_params['detailing_info'] = json.dumps(extended['detailing_info'])
+                if 'workflow_summary' in extended:
+                    metadata.extra_params['workflow_summary'] = json.dumps(extended['workflow_summary'])
+                if 'resource_usage' in extended:
+                    metadata.extra_params['resource_usage'] = json.dumps(extended['resource_usage'])
+
+            # Store timestamp
+            if 'timestamp' in aodh_data:
+                metadata.extra_params['generation_timestamp'] = aodh_data['timestamp']
+
+            # Note: We don't call _parse_comfyui_metadata here because:
+            # 1. The A1111 parameters already contain all the generation info
+            # 2. The ComfyUI prompt data contains link references that would overwrite the correct values
+            # 3. The comfyui_metadata section is already parsed above for extended info
+
+        except json.JSONDecodeError as e:
+            metadata.extra_params['aodh_parse_error'] = f"Invalid JSON: {str(e)}"
+        except Exception as e:
+            metadata.extra_params['aodh_parse_error'] = str(e)

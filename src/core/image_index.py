@@ -2,6 +2,7 @@
 import ast
 import sqlite3
 import json
+import re
 import os
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -42,6 +43,7 @@ class ImageIndex:
                 negative_prompt TEXT DEFAULT '',
                 model TEXT DEFAULT '',
                 model_hash TEXT DEFAULT '',
+                loras TEXT DEFAULT '[]',
                 sampler TEXT DEFAULT '',
                 steps INTEGER DEFAULT 0,
                 cfg_scale REAL DEFAULT 0,
@@ -52,6 +54,15 @@ class ImageIndex:
                 indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
+        # Check if loras column exists (simple migration)
+        cursor.execute("PRAGMA table_info(images)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if 'loras' not in columns:
+            try:
+                cursor.execute("ALTER TABLE images ADD COLUMN loras TEXT DEFAULT '[]'")
+            except sqlite3.Error:
+                pass  # Ignore if it failed (maybe raced or other issue)
         
         # Create indexes for fast filtering
         cursor.execute('''
@@ -115,9 +126,9 @@ class ImageIndex:
             cursor.execute('''
                 INSERT OR REPLACE INTO images (
                     file_path, file_name, width, height, file_size, modified_time,
-                    prompt, negative_prompt, model, model_hash, sampler, steps,
+                    prompt, negative_prompt, model, model_hash, loras, sampler, steps,
                     cfg_scale, seed, source, raw_metadata, extra_params, indexed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ''', (
                 safe_str(metadata.file_path),
                 safe_str(metadata.file_name),
@@ -129,6 +140,7 @@ class ImageIndex:
                 safe_str(metadata.negative_prompt),
                 safe_str(metadata.model),
                 safe_str(metadata.model_hash),
+                json.dumps(metadata.loras) if metadata.loras else '[]',
                 safe_str(metadata.sampler),
                 safe_int(metadata.steps),
                 safe_float(metadata.cfg_scale),
@@ -333,6 +345,31 @@ class ImageIndex:
             except (ValueError, SyntaxError):
                 extra_params = {}
         
+        # Parse LoRAs
+        loras = []
+        if 'loras' in row.keys():
+            loras_raw = row['loras'] or '[]'
+            try:
+                parsed = json.loads(loras_raw)
+                if isinstance(parsed, list):
+                    # Flatten any comma-separated strings and clean up names
+                    # This handles fallback for old/bad data format
+                    raw_names = ",".join(str(i) for i in parsed).split(",")
+                    for name in raw_names:
+                        name = name.strip().strip(",").strip()
+                        if not name:
+                            continue
+                            
+                        # Remove strength info (e.g., "(0.8)" or ":0.8")
+                        name = re.sub(r'\s*\([\d.]+\)$', '', name)
+                        name = re.sub(r':[\d.]+$', '', name)
+                        name = name.strip()
+                        
+                        if name and name not in loras:
+                            loras.append(name)
+            except:
+                pass
+
         return ImageMetadata(
             file_path=row['file_path'],
             file_name=row['file_name'],
@@ -344,6 +381,7 @@ class ImageIndex:
             negative_prompt=row['negative_prompt'] or '',
             model=row['model'] or '',
             model_hash=row['model_hash'] or '',
+            loras=loras,
             sampler=row['sampler'] or '',
             steps=row['steps'],
             cfg_scale=row['cfg_scale'],

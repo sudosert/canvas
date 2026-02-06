@@ -11,7 +11,7 @@ from .metadata_parser import MetadataParser
 class ImageScanner:
     """Scans directories for Stable Diffusion images and extracts metadata."""
     
-    SUPPORTED_EXTENSIONS = {'.png', '.jpg', '.jpeg'}
+    SUPPORTED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.avif', '.jxl'}
     
     def __init__(self, progress_callback: Optional[Callable[[int, int], None]] = None):
         """
