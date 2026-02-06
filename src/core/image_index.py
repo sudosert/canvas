@@ -352,21 +352,21 @@ class ImageIndex:
             try:
                 parsed = json.loads(loras_raw)
                 if isinstance(parsed, list):
-                    # Clean up LoRAs (fallback for old/bad data)
-                    for item in parsed:
-                        if isinstance(item, str):
-                            for name in item.split(','):
-                                name = name.strip()
-                                name = name.strip(',')
-                                name = name.strip()
-                                
-                                # Remove strength info (e.g., "(0.8)" or ":0.8")
-                                name = re.sub(r'\s*\([^)]*\)$', '', name)
-                                name = re.sub(r':[\d.]+$', '', name)
-                                name = name.strip()
-                                
-                                if name and name not in loras:
-                                    loras.append(name)
+                    # Flatten any comma-separated strings and clean up names
+                    # This handles fallback for old/bad data format
+                    raw_names = ",".join(str(i) for i in parsed).split(",")
+                    for name in raw_names:
+                        name = name.strip().strip(",").strip()
+                        if not name:
+                            continue
+                            
+                        # Remove strength info (e.g., "(0.8)" or ":0.8")
+                        name = re.sub(r'\s*\([^)]*\)$', '', name)
+                        name = re.sub(r':[\d.]+$', '', name)
+                        name = name.strip()
+                        
+                        if name and name not in loras:
+                            loras.append(name)
             except:
                 pass
 
