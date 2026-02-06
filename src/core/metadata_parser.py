@@ -66,7 +66,7 @@ class MetadataParser:
             
             # Remove strength info (e.g., "(0.8)" or ":0.8")
             # Handle (0.8) style
-            name = re.sub(r'\s*\(\s*[\d.]+\s*\)$', '', name)
+            name = re.sub(r'\s*\([\d.]+\)$', '', name)
             # Handle :0.8 style (A1111 prompt syntax)
             name = re.sub(r':[\d.]+$', '', name)
             

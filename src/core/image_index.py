@@ -361,7 +361,7 @@ class ImageIndex:
                             continue
                             
                         # Remove strength info (e.g., "(0.8)" or ":0.8")
-                        name = re.sub(r'\s*\(\s*[\d.]+\s*\)$', '', name)
+                        name = re.sub(r'\s*\([\d.]+\)$', '', name)
                         name = re.sub(r':[\d.]+$', '', name)
                         name = name.strip()
                         
