@@ -1,5 +1,6 @@
 """Main application window."""
 import os
+import json
 from typing import List, Optional
 from pathlib import Path
 
@@ -317,9 +318,20 @@ class MainWindow(QMainWindow):
         refresh_all_action = QAction("Refresh All Database Metadata", self)
         refresh_all_action.triggered.connect(self._refresh_all_metadata)
         tools_menu.addAction(refresh_all_action)
-        
+
         tools_menu.addSeparator()
-        
+
+        # Rescan actions
+        rescan_new_action = QAction("Rescan for New Files", self)
+        rescan_new_action.triggered.connect(self._rescan_new_files)
+        tools_menu.addAction(rescan_new_action)
+
+        rescan_all_action = QAction("Rescan All Files", self)
+        rescan_all_action.triggered.connect(self._rescan_all_files)
+        tools_menu.addAction(rescan_all_action)
+
+        tools_menu.addSeparator()
+
         # Settings
         settings_action = QAction("Settings...", self)
         settings_action.setShortcut(QKeySequence.StandardKey.Preferences)
@@ -645,7 +657,160 @@ class MainWindow(QMainWindow):
                 "Refresh Complete",
                 f"Refreshed metadata for {refreshed} images."
             )
-    
+
+    def _rescan_new_files(self):
+        """Rescan for new files in the current folder."""
+        if not self.current_folder:
+            QMessageBox.information(
+                self,
+                "No Folder",
+                "No folder is currently loaded."
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Rescan for New Files",
+            f"Scan for new files in {self.current_folder}?\n\n"
+            "This will add any new images found without re-parsing existing ones.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            # Show progress
+            progress = QProgressDialog(
+                "Scanning for new files...",
+                "Cancel",
+                0,
+                100,
+                self
+            )
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+
+            # Get existing file paths
+            existing_paths = set(img.file_path for img in self.image_index.get_all_images())
+
+            def progress_callback(current, total):
+                if progress.wasCanceled():
+                    return False
+                progress.setValue(int((current / total) * 100))
+                progress.setLabelText(f"Scanning... {current}/{total}")
+                return True
+
+            # Scan directory for new files
+            new_files = []
+            scanner = ImageScanner(progress_callback=progress_callback)
+
+            all_images = scanner.scan_directory(self.current_folder, recursive=True)
+
+            # Find new files
+            for img_metadata in all_images:
+                if img_metadata.file_path not in existing_paths:
+                    new_files.append(img_metadata)
+
+            progress.close()
+
+            if not new_files:
+                QMessageBox.information(
+                    self,
+                    "No New Files",
+                    "No new images found."
+                )
+                return
+
+            # Add new files to index
+            for img_metadata in new_files:
+                self.image_index.add_image(img_metadata)
+
+            # Save to cache
+            if self.use_metadata_cache:
+                all_images = self.image_index.get_all_images()
+                self.metadata_cache.save_cache(self.current_folder, all_images)
+
+            # Reload display
+            self._apply_filters()
+
+            QMessageBox.information(
+                self,
+                "Rescan Complete",
+                f"Added {len(new_files)} new images."
+            )
+
+    def _rescan_all_files(self):
+        """Rescan all files in the current folder, flushing all metadata."""
+        if not self.current_folder:
+            QMessageBox.information(
+                self,
+                "No Folder",
+                "No folder is currently loaded."
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Rescan All Files",
+            f"Rescan all files in {self.current_folder}?\n\n"
+            "This will flush all metadata and re-parse every image file.\n"
+            "This may take a while for large collections.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            # Clear the index
+            self.image_index.clear()
+
+            # Clear the cache for this folder
+            self.metadata_cache.clear_cache(self.current_folder)
+
+            # Show progress
+            progress = QProgressDialog(
+                "Rescanning all files...",
+                "Cancel",
+                0,
+                100,
+                self
+            )
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+
+            # Scan directory
+            scanner = ImageScanner()
+
+            def progress_callback(current, total):
+                if progress.wasCanceled():
+                    return False
+                progress.setValue(int((current / total) * 100))
+                progress.setLabelText(f"Scanning... {current}/{total}")
+                return True
+
+            all_images = scanner.scan_directory(self.current_folder, recursive=True, progress_callback=progress_callback)
+
+            progress.close()
+
+            if not all_images:
+                QMessageBox.information(
+                    self,
+                    "No Images",
+                    "No images found in the folder."
+                )
+                return
+
+            # Add all images to index
+            for img_metadata in all_images:
+                self.image_index.add_image(img_metadata)
+
+            # Save to cache
+            if self.use_metadata_cache:
+                self.metadata_cache.save_cache(self.current_folder, all_images)
+
+            # Reload display
+            self._apply_filters()
+
+            QMessageBox.information(
+                self,
+                "Rescan Complete",
+                f"Rescanned {len(all_images)} images."
+            )
+
     def _apply_filters(self):
         """Apply current filter and sort settings."""
         print("[DEBUG] Applying filters...")
@@ -802,6 +967,20 @@ class MainWindow(QMainWindow):
         self.current_image_index = index
         metadata = self.filtered_images[index]
         print(f"[DEBUG] Loading image: {metadata.file_path}")
+        
+        # Create a copy of metadata for debugging, excluding heavy workflow data
+        debug_meta = metadata.to_dict()
+        if 'extra_params' in debug_meta and isinstance(debug_meta['extra_params'], str):
+            try:
+                params = json.loads(debug_meta['extra_params'])
+                params.pop('workflow', None)
+                params.pop('workflow_raw', None)
+                params.pop('workflow_nodes', None)
+                debug_meta['extra_params'] = params
+            except:
+                pass
+        
+        print(f"[DEBUG] Metadata: {json.dumps(debug_meta, indent=2)}")
         
         try:
             # Update viewer

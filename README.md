@@ -8,6 +8,12 @@ A desktop image viewer application tailored for Stable Diffusion generated image
   - Supports A1111 (Automatic1111) format
   - Supports ComfyUI format
   - Extracts prompts, negative prompts, models, seeds, and more
+  - **LoRA Support**: Detects and lists LoRA models used in generation
+
+- **ComfyUI Workflow**:
+  - **View Workflow**: Button to view the full node graph for ComfyUI images
+  - Open workflow in browser or save as JSON file
+  - Compatible with standard ComfyUI drag-and-drop
 
 - **Prompt Filtering**: Advanced filtering system
   - Include terms: Show only images containing ALL specified terms

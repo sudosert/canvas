@@ -20,7 +20,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
-        self.setMinimumSize(600, 400)
+        self.setMinimumSize(600, 725)
         
         self.settings = QSettings("SDImageViewer", "Settings")
         self._setup_ui()

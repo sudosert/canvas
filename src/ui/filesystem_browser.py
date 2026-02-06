@@ -151,7 +151,10 @@ class FilesystemBrowser(QWidget):
         self.model.setFilter(QDir.Filter.AllDirs | QDir.Filter.Files | QDir.Filter.NoDotAndDotDot)
         
         # Set name filters for image files
-        self.model.setNameFilters(["*.png", "*.jpg", "*.jpeg", "*.PNG", "*.JPG", "*.JPEG"])
+        self.model.setNameFilters([
+            "*.png", "*.jpg", "*.jpeg", "*.webp", "*.avif", "*.jxl",
+            "*.PNG", "*.JPG", "*.JPEG", "*.WEBP", "*.AVIF", "*.JXL"
+        ])
         self.model.setNameFilterDisables(False)  # Hide non-matching files
         
         self.tree_view = QTreeView()

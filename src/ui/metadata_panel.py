@@ -1,10 +1,14 @@
 """Metadata panel for displaying image generation information."""
+import json
+import os
+import tempfile
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QScrollArea, QFrame,
-    QPushButton, QApplication, QTextEdit, QSizePolicy
+    QPushButton, QApplication, QTextEdit, QSizePolicy,
+    QMenu, QFileDialog
 )
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QFont, QDesktopServices
 
 from ..models.image_data import ImageMetadata
 
@@ -55,7 +59,7 @@ class MetadataPanel(QWidget):
         # Generation params section
         self._add_section("Generation Parameters", [
             ("Model:", "model"),
-            ("Model Hash:", "model_hash"),
+            ("LoRAs:", "loras"),
             ("Sampler:", "sampler"),
             ("Steps:", "steps_str"),
             ("CFG Scale:", "cfg_str"),
@@ -125,6 +129,12 @@ class MetadataPanel(QWidget):
         self.raw_toggle_btn.setCheckable(True)
         self.raw_toggle_btn.clicked.connect(self._toggle_raw_metadata)
         self.content_layout.addWidget(self.raw_toggle_btn)
+
+        # View Workflow button
+        self.workflow_btn = QPushButton("View Workflow")
+        self.workflow_btn.clicked.connect(self._view_workflow)
+        self.workflow_btn.hide()
+        self.content_layout.addWidget(self.workflow_btn)
         
         self.raw_metadata_text = QTextEdit()
         self.raw_metadata_text.setReadOnly(True)
@@ -232,11 +242,27 @@ class MetadataPanel(QWidget):
         
         # Update generation params
         self._set_value("model", metadata.model or "-")
-        self._set_value("model_hash", metadata.model_hash or "-")
+        
+        loras_text = "-"
+        if metadata.loras:
+            if isinstance(metadata.loras, list):
+                loras_text = "\n".join(str(l) for l in metadata.loras)
+            else:
+                loras_text = str(metadata.loras)
+        self._set_value("loras", loras_text)
+        
         self._set_value("sampler", metadata.sampler or "-")
         self._set_value("steps_str", str(metadata.steps) if metadata.steps else "-")
         self._set_value("cfg_str", str(metadata.cfg_scale) if metadata.cfg_scale else "-")
         self._set_value("seed_str", str(metadata.seed) if metadata.seed else "-")
+
+        # Show/hide workflow button
+        has_workflow = (
+            metadata.source == "comfyui" or 
+            'workflow' in metadata.extra_params or 
+            'workflow_raw' in metadata.extra_params
+        )
+        self.workflow_btn.setVisible(has_workflow)
         
         # Update prompts - remove escape characters from quotes
         prompt_text = (metadata.prompt or "No prompt data").replace('\\"', '"').replace("\\'", "'")
@@ -248,6 +274,74 @@ class MetadataPanel(QWidget):
         # Update raw metadata - remove escape characters
         raw_text = (metadata.raw_metadata or "No raw metadata available").replace('\\"', '"').replace("\\'", "'")
         self.raw_metadata_text.setText(raw_text)
+    
+    def _view_workflow(self):
+        """Show options to view workflow."""
+        if not self.current_metadata:
+            return
+            
+        menu = QMenu(self)
+        
+        open_browser_action = menu.addAction("Open in Browser (ComfyUI)")
+        save_json_action = menu.addAction("Save as JSON")
+        
+        action = menu.exec(self.workflow_btn.mapToGlobal(self.workflow_btn.rect().bottomLeft()))
+        
+        if action == open_browser_action:
+            self._open_workflow_in_browser()
+        elif action == save_json_action:
+            self._save_workflow_json()
+
+    def _get_workflow_json(self):
+        """Get workflow JSON string."""
+        if not self.current_metadata:
+            return None
+            
+        workflow = self.current_metadata.extra_params.get('workflow')
+        if not workflow:
+            workflow = self.current_metadata.extra_params.get('workflow_raw')
+            
+        return workflow
+
+    def _open_workflow_in_browser(self):
+        """Open workflow in browser (using a temporary file)."""
+        workflow_json = self._get_workflow_json()
+        if not workflow_json:
+            return
+            
+        try:
+            # Create a temporary file with .json extension
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+                f.write(workflow_json)
+                temp_path = f.name
+                
+            # Open with default application (usually browser for some, or text editor)
+            # A better way might be to provide a drag-droppable file or a simple HTML viewer
+            # For now, let's try opening the file URL
+            QDesktopServices.openUrl(QUrl.fromLocalFile(temp_path))
+            
+        except Exception as e:
+            print(f"Error opening workflow: {e}")
+
+    def _save_workflow_json(self):
+        """Save workflow as JSON file."""
+        workflow_json = self._get_workflow_json()
+        if not workflow_json:
+            return
+            
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Workflow JSON",
+            "workflow.json",
+            "JSON Files (*.json)"
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, 'w') as f:
+                    f.write(workflow_json)
+            except Exception as e:
+                print(f"Error saving workflow: {e}")
     
     def _set_value(self, attr_name: str, value: str):
         """Set the value label for a field."""
